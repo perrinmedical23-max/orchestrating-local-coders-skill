@@ -11,6 +11,7 @@ TASK_FILE="${TEST_TMPDIR}/task.md"
 ACCEPTANCE_FILE="${TEST_TMPDIR}/acceptance.md"
 BAD_PROVIDER_DIR="${TEST_TMPDIR}/bad-provider"
 INCONSISTENT_PROVIDER_DIR="${TEST_TMPDIR}/inconsistent-provider"
+PARTIAL_PROVIDER_DIR="${TEST_TMPDIR}/partial-provider"
 
 mkdir -p "${TMP_REPO}"
 git -C "${TMP_REPO}" init -q
@@ -158,6 +159,52 @@ assert_json_value "${INCONSISTENT_TASK_DIR}/report.json" "diagnostics.exit_code"
   --repo "${TMP_REPO}" > "${INCONSISTENT_COLLECT_OUTPUT}"
 assert_json_value "${INCONSISTENT_TASK_DIR}/status.json" "status" "failed"
 assert_json_value "${INCONSISTENT_COLLECT_OUTPUT}" "task_id" "${INCONSISTENT_TASK_ID}"
+
+mkdir -p "${PARTIAL_PROVIDER_DIR}"
+cat > "${PARTIAL_PROVIDER_DIR}/fake-partial-nonzero.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+task_dir="$1"
+cat > "${task_dir}/report.json" <<'JSON'
+{"status":"partial","summary":"partial progress with open questions","files_changed":["README.md"],"tests_run":[],"open_questions":["needs coordinator review"],"risks":[],"notes":[]}
+JSON
+exit 42
+EOF
+chmod +x "${PARTIAL_PROVIDER_DIR}/fake-partial-nonzero.sh"
+
+PARTIAL_RUN_OUTPUT="${TEST_TMPDIR}/partial-nonzero-run.json"
+PARTIAL_COLLECT_OUTPUT="${TEST_TMPDIR}/partial-nonzero-collect.json"
+AGENT_ORCH_PROVIDER_DIR="${PARTIAL_PROVIDER_DIR}" \
+  "${ROOT_DIR}/bin/agent-orch" run \
+  --worker fake-partial-nonzero \
+  --repo "${TMP_REPO}" \
+  --mode worktree \
+  --task-file "${TASK_FILE}" \
+  --acceptance-file "${ACCEPTANCE_FILE}" > "${PARTIAL_RUN_OUTPUT}"
+
+PARTIAL_TASK_ID="$(python3 - "${PARTIAL_RUN_OUTPUT}" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1], encoding="utf-8"))["task_id"])
+PY
+)"
+PARTIAL_TASK_DIR="$(python3 - "${PARTIAL_RUN_OUTPUT}" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1], encoding="utf-8"))["task_dir"])
+PY
+)"
+assert_json_value "${PARTIAL_RUN_OUTPUT}" "status" "partial"
+assert_json_value "${PARTIAL_TASK_DIR}/report.json" "status" "partial"
+assert_json_value "${PARTIAL_TASK_DIR}/report.json" "summary" "partial progress with open questions"
+"${ROOT_DIR}/bin/agent-orch" collect \
+  --task-id "${PARTIAL_TASK_ID}" \
+  --repo "${TMP_REPO}" > "${PARTIAL_COLLECT_OUTPUT}"
+assert_json_value "${PARTIAL_TASK_DIR}/status.json" "status" "partial"
+assert_contains "${PARTIAL_COLLECT_OUTPUT}" "README.md"
 
 mkdir -p "${BAD_PROVIDER_DIR}"
 cat > "${BAD_PROVIDER_DIR}/fake-bad-shebang.sh" <<'EOF'

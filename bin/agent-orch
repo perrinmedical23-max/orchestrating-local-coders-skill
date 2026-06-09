@@ -24,7 +24,7 @@ except Exception:
 
 if result.get("timed_out") or result.get("signal") is not None:
     sys.exit(0)
-if result.get("exit_code") not in (None, 0) and report.get("status") != "failed":
+if result.get("exit_code") not in (None, 0) and report.get("status") == "completed":
     sys.exit(0)
 sys.exit(1)
 PY
