@@ -10,6 +10,7 @@ TMP_REPO="${TEST_TMPDIR}/repo"
 TASK_FILE="${TEST_TMPDIR}/task.md"
 ACCEPTANCE_FILE="${TEST_TMPDIR}/acceptance.md"
 BAD_PROVIDER_DIR="${TEST_TMPDIR}/bad-provider"
+INCONSISTENT_PROVIDER_DIR="${TEST_TMPDIR}/inconsistent-provider"
 
 mkdir -p "${TMP_REPO}"
 git -C "${TMP_REPO}" init -q
@@ -111,6 +112,52 @@ run_failure_case fake-missing-report no False no
 run_failure_case fake-invalid-report yes False no
 run_failure_case fake-timeout no True no
 run_failure_case fake-signal no False yes
+
+mkdir -p "${INCONSISTENT_PROVIDER_DIR}"
+cat > "${INCONSISTENT_PROVIDER_DIR}/fake-completed-nonzero.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+task_dir="$1"
+cat > "${task_dir}/report.json" <<'JSON'
+{"status":"completed","summary":"inconsistent provider result","files_changed":[],"tests_run":[],"open_questions":[],"risks":[],"notes":[]}
+JSON
+exit 42
+EOF
+chmod +x "${INCONSISTENT_PROVIDER_DIR}/fake-completed-nonzero.sh"
+
+INCONSISTENT_RUN_OUTPUT="${TEST_TMPDIR}/completed-nonzero-run.json"
+INCONSISTENT_COLLECT_OUTPUT="${TEST_TMPDIR}/completed-nonzero-collect.json"
+AGENT_ORCH_PROVIDER_DIR="${INCONSISTENT_PROVIDER_DIR}" \
+  "${ROOT_DIR}/bin/agent-orch" run \
+  --worker fake-completed-nonzero \
+  --repo "${TMP_REPO}" \
+  --mode worktree \
+  --task-file "${TASK_FILE}" \
+  --acceptance-file "${ACCEPTANCE_FILE}" > "${INCONSISTENT_RUN_OUTPUT}"
+
+INCONSISTENT_TASK_ID="$(python3 - "${INCONSISTENT_RUN_OUTPUT}" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1], encoding="utf-8"))["task_id"])
+PY
+)"
+INCONSISTENT_TASK_DIR="$(python3 - "${INCONSISTENT_RUN_OUTPUT}" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1], encoding="utf-8"))["task_dir"])
+PY
+)"
+assert_json_value "${INCONSISTENT_RUN_OUTPUT}" "status" "failed"
+assert_json_value "${INCONSISTENT_TASK_DIR}/report.json" "status" "failed"
+assert_json_value "${INCONSISTENT_TASK_DIR}/report.json" "diagnostics.exit_code" "42"
+"${ROOT_DIR}/bin/agent-orch" collect \
+  --task-id "${INCONSISTENT_TASK_ID}" \
+  --repo "${TMP_REPO}" > "${INCONSISTENT_COLLECT_OUTPUT}"
+assert_json_value "${INCONSISTENT_TASK_DIR}/status.json" "status" "failed"
+assert_json_value "${INCONSISTENT_COLLECT_OUTPUT}" "task_id" "${INCONSISTENT_TASK_ID}"
 
 mkdir -p "${BAD_PROVIDER_DIR}"
 cat > "${BAD_PROVIDER_DIR}/fake-bad-shebang.sh" <<'EOF'

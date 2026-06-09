@@ -9,17 +9,22 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 provider_result_needs_synthetic_report() {
   local provider_result_path="$1"
-  python3 - "${provider_result_path}" <<'PY'
+  local report_path="$2"
+  python3 - "${provider_result_path}" "${report_path}" <<'PY'
 import json
 import sys
 
 try:
     with open(sys.argv[1], "r", encoding="utf-8") as handle:
         result = json.load(handle)
+    with open(sys.argv[2], "r", encoding="utf-8") as handle:
+        report = json.load(handle)
 except Exception:
     sys.exit(1)
 
 if result.get("timed_out") or result.get("signal") is not None:
+    sys.exit(0)
+if result.get("exit_code") not in (None, 0) and report.get("status") != "failed":
     sys.exit(0)
 sys.exit(1)
 PY
@@ -55,7 +60,7 @@ repair_report_if_needed() {
     return
   fi
 
-  if provider_result_needs_synthetic_report "${provider_result_path}"; then
+  if provider_result_needs_synthetic_report "${provider_result_path}" "${report_path}"; then
     python3 "${ROOT_DIR}/lib/agent-orch/report.py" synthesize-failure \
       "${report_path}" \
       "${provider_result_path}" \
