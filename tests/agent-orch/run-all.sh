@@ -3,8 +3,19 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-bash "${ROOT_DIR}/tests/agent-orch/run-worktree.sh"
-bash "${ROOT_DIR}/tests/agent-orch/status.sh"
-bash "${ROOT_DIR}/tests/agent-orch/collect-success.sh"
-bash "${ROOT_DIR}/tests/agent-orch/collect-failure.sh"
-bash "${ROOT_DIR}/tests/agent-orch/cleanup.sh"
+tests=(
+  "run-worktree.sh"
+  "status.sh"
+  "collect-success.sh"
+  "collect-failure.sh"
+  "cleanup.sh"
+)
+
+for test_name in "${tests[@]}"; do
+  test_path="${ROOT_DIR}/tests/agent-orch/${test_name}"
+  if [[ ! -f "${test_path}" ]]; then
+    printf 'missing test: %s\n' "${test_path}" >&2
+    exit 1
+  fi
+  bash "${test_path}"
+done
