@@ -10,6 +10,7 @@ tests=(
   "collect-failure.sh"
   "cleanup.sh"
   "skill-docs.sh"
+  "provider-boundary.sh"
 )
 
 for test_name in "${tests[@]}"; do

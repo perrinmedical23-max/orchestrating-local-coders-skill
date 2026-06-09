@@ -1,6 +1,11 @@
 # orchestrating-local-coders-skill
 
-Skill and wrapper design work for a Codex-led local orchestration workflow that delegates bounded tasks to Claude Code and OpenCode while keeping planning, validation, and integration under Codex control.
+Skill and wrapper core for a Codex-led local orchestration workflow. The repo
+contains the `agent-orch` shell wrapper, deterministic fixture providers, and a
+Codex-facing skill for delegating bounded local coding tasks while keeping
+planning, validation, and integration under Codex control.
+
+Runtime dependencies: `bash`, `git`, and `python3`.
 
 ## Current Status
 
@@ -14,11 +19,30 @@ Version 1 is centered on:
 
 - a Codex-facing skill for delegation discipline
 - a thin shell wrapper for local worker orchestration
-- worktree-only isolation
+- worktree-only v1 isolation
 - structured worker result collection
-- deterministic fixture providers
+- deterministic fixture-provider v1 scope
 
-Real `claude` and `opencode` adapters, sessions, and inplace execution are follow-up work.
+V1 supports only `--mode worktree`; inplace execution is follow-up work.
+Real `claude` and `opencode` adapters are follow-up work once local CLI contracts are explicitly pinned.
+
+## Local Tests
+
+Run the wrapper-core suite with:
+
+```bash
+bash tests/agent-orch/run-all.sh
+```
+
+The suite uses deterministic fixture providers. Point the wrapper at a provider
+directory with `AGENT_ORCH_PROVIDER_DIR`; worker `fake-success` resolves to:
+
+```text
+${AGENT_ORCH_PROVIDER_DIR}/fake-success.sh
+```
+
+Providers receive the task-state directory and normalized `task.json`, then run
+inside the assigned worktree workspace.
 
 ## Skill Installation
 
