@@ -59,6 +59,46 @@ agent_orch_create_task_dir() {
   printf '%s\n' "${task_root}/${task_id}"
 }
 
+agent_orch_resolve_task_dir() {
+  local task_id="$1"
+  local repo="$2"
+  local task_dir="$3"
+  local locator_count=0
+  local resolved_task_dir
+
+  [[ -n "${task_id}" ]] || die "missing_arg" "--task-id is required"
+
+  if [[ -n "${repo}" ]]; then
+    locator_count=$((locator_count + 1))
+  fi
+  if [[ -n "${task_dir}" ]]; then
+    locator_count=$((locator_count + 1))
+  fi
+  if [[ "${locator_count}" -ne 1 ]]; then
+    die "invalid_args" "provide exactly one locator: --repo or --task-dir"
+  fi
+
+  if [[ -n "${repo}" ]]; then
+    local repo_path
+    repo_path="$(agent_orch_resolve_repo "${repo}")"
+    resolved_task_dir="${repo_path}/.superpowers/agent-orch/tasks/${task_id}"
+  else
+    resolved_task_dir="$(agent_orch_abs_path "${task_dir}")"
+  fi
+
+  if [[ ! -d "${resolved_task_dir}" || ! -f "${resolved_task_dir}/status.json" || ! -f "${resolved_task_dir}/metadata.json" ]]; then
+    die "task_not_found" "task not found: ${task_id}"
+  fi
+
+  local stored_task_id
+  stored_task_id="$(agent_orch_json_value "${resolved_task_dir}/status.json" "task_id")"
+  if [[ "${stored_task_id}" != "${task_id}" ]]; then
+    die "task_not_found" "task not found: ${task_id}"
+  fi
+
+  printf '%s\n' "${resolved_task_dir}"
+}
+
 agent_orch_write_task_json() {
   local path="$1"
   local task_id="$2"
@@ -197,5 +237,37 @@ print(json.dumps({
     "task_dir": task_dir,
     "report_path": report_path,
 }, separators=(",", ":")))
+PY
+}
+
+agent_orch_print_status_result() {
+  local task_dir="$1"
+
+  python3 - "${task_dir}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+task_dir = Path(sys.argv[1])
+with (task_dir / "status.json").open("r", encoding="utf-8") as handle:
+    status = json.load(handle)
+with (task_dir / "metadata.json").open("r", encoding="utf-8") as handle:
+    metadata = json.load(handle)
+
+payload = {
+    "task_id": status["task_id"],
+    "status": status["status"],
+    "mode": status["mode"],
+    "worker": status.get("worker"),
+    "repo_path": metadata["repo_path"],
+    "worktree_path": metadata["worktree_path"],
+    "report_path": str(task_dir / "report.json"),
+    "log_paths": {
+        "stdout": str(task_dir / "stdout.log"),
+        "stderr": str(task_dir / "stderr.log"),
+    },
+}
+
+print(json.dumps(payload, separators=(",", ":")))
 PY
 }

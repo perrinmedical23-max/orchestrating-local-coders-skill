@@ -146,6 +146,39 @@ run_command() {
   agent_orch_print_run_result "${task_id}" "${report_status}" "${task_dir}" "${task_dir}/report.json"
 }
 
+status_command() {
+  local task_id=""
+  local repo=""
+  local task_dir=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --task-id)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-id requires a value"
+        task_id="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      --task-dir)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-dir requires a value"
+        task_dir="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown status argument: $1"
+        ;;
+    esac
+  done
+
+  local resolved_task_dir
+  resolved_task_dir="$(agent_orch_resolve_task_dir "${task_id}" "${repo}" "${task_dir}")"
+  agent_orch_print_status_result "${resolved_task_dir}"
+}
+
 command_name="${1:-}"
 shift || true
 
@@ -153,7 +186,10 @@ case "${command_name}" in
   run)
     run_command "$@"
     ;;
-  status|collect|cleanup)
+  status)
+    status_command "$@"
+    ;;
+  collect|cleanup)
     die "not_implemented" "subcommand ${command_name} is not implemented yet"
     ;;
   *)
