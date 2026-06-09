@@ -43,7 +43,9 @@ repair_report_if_needed() {
   fi
 
   if ! python3 "${ROOT_DIR}/lib/agent-orch/report.py" validate "${report_path}" >/dev/null 2>&1; then
-    mv -f "${report_path}" "${raw_report_path}"
+    if [[ ! -f "${raw_report_path}" ]]; then
+      mv -f "${report_path}" "${raw_report_path}"
+    fi
     python3 "${ROOT_DIR}/lib/agent-orch/report.py" synthesize-failure \
       "${report_path}" \
       "${provider_result_path}" \
@@ -267,6 +269,18 @@ collect_command() {
   local resolved_task_dir
   resolved_task_dir="$(agent_orch_resolve_task_dir "${task_id}" "${repo}" "${task_dir}")"
   repair_report_if_needed "${resolved_task_dir}"
+
+  local report_status
+  report_status="$(agent_orch_report_status "${resolved_task_dir}/report.json")"
+  agent_orch_write_status_json \
+    "${resolved_task_dir}/status.json" \
+    "$(agent_orch_json_value "${resolved_task_dir}/status.json" "task_id")" \
+    "${report_status}" \
+    "$(agent_orch_json_value "${resolved_task_dir}/status.json" "worker")" \
+    "$(agent_orch_json_value "${resolved_task_dir}/status.json" "mode")" \
+    "$(agent_orch_json_value "${resolved_task_dir}/status.json" "repo_path")" \
+    "$(agent_orch_json_value "${resolved_task_dir}/status.json" "worktree_path")" \
+    "${resolved_task_dir}/report.json"
 
   python3 - "${resolved_task_dir}" <<'PY'
 import json

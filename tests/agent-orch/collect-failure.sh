@@ -9,6 +9,7 @@ setup_temp_dir
 TMP_REPO="${TEST_TMPDIR}/repo"
 TASK_FILE="${TEST_TMPDIR}/task.md"
 ACCEPTANCE_FILE="${TEST_TMPDIR}/acceptance.md"
+BAD_PROVIDER_DIR="${TEST_TMPDIR}/bad-provider"
 
 mkdir -p "${TMP_REPO}"
 git -C "${TMP_REPO}" init -q
@@ -76,6 +77,12 @@ PY
   if [[ "${expect_raw}" == "yes" ]]; then
     assert_file_exists "${task_dir}/report.raw"
     assert_json_value "${task_dir}/report.json" "diagnostics.raw_report_path" "${task_dir}/report.raw"
+    cp "${task_dir}/report.raw" "${TEST_TMPDIR}/${worker}.first-raw"
+    printf 'second invalid payload\n' > "${task_dir}/report.json"
+    "${ROOT_DIR}/bin/agent-orch" collect \
+      --task-id "${task_id}" \
+      --repo "${TMP_REPO}" > "${collect_output}"
+    cmp "${TEST_TMPDIR}/${worker}.first-raw" "${task_dir}/report.raw"
   elif [[ -e "${task_dir}/report.raw" ]]; then
     printf 'did not expect report.raw for %s\n' "${worker}" >&2
     exit 1
@@ -104,5 +111,64 @@ run_failure_case fake-missing-report no False no
 run_failure_case fake-invalid-report yes False no
 run_failure_case fake-timeout no True no
 run_failure_case fake-signal no False yes
+
+mkdir -p "${BAD_PROVIDER_DIR}"
+cat > "${BAD_PROVIDER_DIR}/fake-bad-shebang.sh" <<'EOF'
+#!/not/a/real/interpreter
+EOF
+chmod +x "${BAD_PROVIDER_DIR}/fake-bad-shebang.sh"
+
+BAD_RUN_OUTPUT="${TEST_TMPDIR}/bad-shebang-run.json"
+AGENT_ORCH_PROVIDER_DIR="${BAD_PROVIDER_DIR}" \
+  "${ROOT_DIR}/bin/agent-orch" run \
+  --worker fake-bad-shebang \
+  --repo "${TMP_REPO}" \
+  --mode worktree \
+  --task-file "${TASK_FILE}" \
+  --acceptance-file "${ACCEPTANCE_FILE}" > "${BAD_RUN_OUTPUT}"
+
+BAD_TASK_DIR="$(python3 - "${BAD_RUN_OUTPUT}" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1], encoding="utf-8"))["task_dir"])
+PY
+)"
+assert_json_value "${BAD_RUN_OUTPUT}" "status" "failed"
+assert_file_exists "${BAD_TASK_DIR}/provider-result.json"
+assert_file_exists "${BAD_TASK_DIR}/stderr.log"
+assert_json_value "${BAD_TASK_DIR}/provider-result.json" "exit_code" "127"
+assert_contains "${BAD_TASK_DIR}/stderr.log" "failed to launch provider"
+
+SUCCESS_RUN_OUTPUT="${TEST_TMPDIR}/success-for-repair-run.json"
+SUCCESS_COLLECT_OUTPUT="${TEST_TMPDIR}/success-for-repair-collect.json"
+AGENT_ORCH_PROVIDER_DIR="${ROOT_DIR}/tests/fixtures/providers" \
+  "${ROOT_DIR}/bin/agent-orch" run \
+  --worker fake-success \
+  --repo "${TMP_REPO}" \
+  --mode worktree \
+  --task-file "${TASK_FILE}" \
+  --acceptance-file "${ACCEPTANCE_FILE}" > "${SUCCESS_RUN_OUTPUT}"
+
+SUCCESS_TASK_ID="$(python3 - "${SUCCESS_RUN_OUTPUT}" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1], encoding="utf-8"))["task_id"])
+PY
+)"
+SUCCESS_TASK_DIR="$(python3 - "${SUCCESS_RUN_OUTPUT}" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1], encoding="utf-8"))["task_dir"])
+PY
+)"
+rm -f "${SUCCESS_TASK_DIR}/report.json"
+"${ROOT_DIR}/bin/agent-orch" collect \
+  --task-id "${SUCCESS_TASK_ID}" \
+  --repo "${TMP_REPO}" > "${SUCCESS_COLLECT_OUTPUT}"
+assert_json_value "${SUCCESS_TASK_DIR}/report.json" "status" "failed"
+assert_json_value "${SUCCESS_TASK_DIR}/status.json" "status" "failed"
 
 printf 'collect-failure.sh: ok\n'

@@ -50,29 +50,37 @@ def main(argv):
     returncode = None
 
     with Path(args.stdout).open("wb") as stdout, Path(args.stderr).open("wb") as stderr:
-        process = subprocess.Popen(
-            command,
-            cwd=args.cwd,
-            stdout=stdout,
-            stderr=stderr,
-            start_new_session=True,
-        )
         try:
-            returncode = process.wait(timeout=timeout_seconds())
-        except subprocess.TimeoutExpired:
-            timed_out = True
+            process = subprocess.Popen(
+                command,
+                cwd=args.cwd,
+                stdout=stdout,
+                stderr=stderr,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            returncode = 127
+            stderr.write(f"failed to launch provider: {exc}\n".encode("utf-8", errors="replace"))
+            stderr.flush()
+            process = None
+
+        if process is not None:
             try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                returncode = process.wait(timeout=2)
+                returncode = process.wait(timeout=timeout_seconds())
             except subprocess.TimeoutExpired:
+                timed_out = True
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    os.killpg(process.pid, signal.SIGTERM)
                 except ProcessLookupError:
                     pass
-                returncode = process.wait()
+                try:
+                    returncode = process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    returncode = process.wait()
 
     finished_at = utc_now()
     provider_signal = None
