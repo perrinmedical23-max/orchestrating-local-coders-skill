@@ -3,12 +3,157 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "${ROOT_DIR}/lib/agent-orch/common.sh"
+. "${ROOT_DIR}/lib/agent-orch/task-store.sh"
+. "${ROOT_DIR}/lib/agent-orch/worktree.sh"
+. "${ROOT_DIR}/lib/agent-orch/provider.sh"
+
+run_command() {
+  local worker=""
+  local repo=""
+  local mode="worktree"
+  local task_file=""
+  local prompt=""
+  local acceptance_file=""
+  local output_dir=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --worker)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--worker requires a value"
+        worker="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      --mode)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--mode requires a value"
+        mode="$2"
+        shift 2
+        ;;
+      --task-file)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-file requires a value"
+        task_file="$2"
+        shift 2
+        ;;
+      --prompt)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--prompt requires a value"
+        prompt="$2"
+        shift 2
+        ;;
+      --acceptance-file)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--acceptance-file requires a value"
+        acceptance_file="$2"
+        shift 2
+        ;;
+      --output-dir)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--output-dir requires a value"
+        output_dir="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown run argument: $1"
+        ;;
+    esac
+  done
+
+  if [[ "${mode}" != "worktree" ]]; then
+    die "unsupported_mode" "version 1 supports only --mode worktree"
+  fi
+
+  [[ -n "${worker}" ]] || die "missing_arg" "--worker is required"
+  [[ -n "${repo}" ]] || die "missing_arg" "--repo is required"
+  [[ -n "${acceptance_file}" ]] || die "missing_arg" "--acceptance-file is required"
+  if [[ -n "${task_file}" && -n "${prompt}" ]]; then
+    die "invalid_args" "provide exactly one of --task-file or --prompt"
+  fi
+  if [[ -z "${task_file}" && -z "${prompt}" ]]; then
+    die "invalid_args" "provide exactly one of --task-file or --prompt"
+  fi
+  if [[ -n "${task_file}" && ! -f "${task_file}" ]]; then
+    die "missing_file" "task file does not exist: ${task_file}"
+  fi
+  if [[ ! -f "${acceptance_file}" ]]; then
+    die "missing_file" "acceptance file does not exist: ${acceptance_file}"
+  fi
+
+  local repo_path
+  repo_path="$(agent_orch_resolve_repo "${repo}")"
+
+  local task_id
+  task_id="$(agent_orch_new_task_id)"
+
+  local task_dir
+  task_dir="$(agent_orch_create_task_dir "${repo_path}" "${task_id}" "${output_dir}")"
+
+  local metadata_path="${task_dir}/metadata.json"
+  local worktree_path
+  worktree_path="$(agent_orch_create_worktree "${repo_path}" "${task_id}" "${metadata_path}")"
+
+  local base_rev
+  base_rev="$(agent_orch_json_value "${metadata_path}" "base_rev")"
+
+  local task_statement
+  local task_file_path=""
+  if [[ -n "${task_file}" ]]; then
+    task_file_path="$(agent_orch_abs_path "${task_file}")"
+    task_statement="$(cat "${task_file}")"
+  else
+    task_statement="${prompt}"
+  fi
+
+  local acceptance_file_path
+  local acceptance_criteria
+  acceptance_file_path="$(agent_orch_abs_path "${acceptance_file}")"
+  acceptance_criteria="$(cat "${acceptance_file}")"
+
+  local task_json="${task_dir}/task.json"
+  agent_orch_write_task_json \
+    "${task_json}" \
+    "${task_id}" \
+    "${worker}" \
+    "${mode}" \
+    "${repo_path}" \
+    "${worktree_path}" \
+    "${task_statement}" \
+    "${task_file_path}" \
+    "${prompt}" \
+    "${acceptance_file_path}" \
+    "${acceptance_criteria}"
+
+  agent_orch_write_status_json "${task_dir}/status.json" "${task_id}" "running" "${worker}" "${mode}" "${repo_path}" "${worktree_path}" "${task_dir}/report.json"
+
+  local exit_code
+  set +e
+  agent_orch_dispatch_provider "${worker}" "${task_dir}" "${task_json}" "${worktree_path}"
+  exit_code="$?"
+  set -e
+
+  local report_status="failed"
+  if [[ -f "${task_dir}/report.json" ]]; then
+    report_status="$(agent_orch_report_status "${task_dir}/report.json")"
+  fi
+  if [[ "${exit_code}" -ne 0 && "${report_status}" == "completed" ]]; then
+    report_status="failed"
+  fi
+
+  agent_orch_write_status_json "${task_dir}/status.json" "${task_id}" "${report_status}" "${worker}" "${mode}" "${repo_path}" "${worktree_path}" "${task_dir}/report.json"
+  git -C "${worktree_path}" diff --stat "${base_rev}" -- > "${task_dir}/git.diffstat"
+  cp "${task_dir}/git.diffstat" "${task_dir}/diff_summary"
+
+  agent_orch_print_run_result "${task_id}" "${report_status}" "${task_dir}" "${task_dir}/report.json"
+}
 
 command_name="${1:-}"
 shift || true
 
 case "${command_name}" in
-  run|status|collect|cleanup)
+  run)
+    run_command "$@"
+    ;;
+  status|collect|cleanup)
     die "not_implemented" "subcommand ${command_name} is not implemented yet"
     ;;
   *)
