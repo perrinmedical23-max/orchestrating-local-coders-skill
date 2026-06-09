@@ -11,7 +11,9 @@ TASK_FILE="${TEST_TMPDIR}/task.md"
 ACCEPTANCE_FILE="${TEST_TMPDIR}/acceptance.md"
 RUN_OUTPUT="${TEST_TMPDIR}/run-output.json"
 PROMPT_OUTPUT="${TEST_TMPDIR}/prompt-output.json"
+FAIL_OUTPUT="${TEST_TMPDIR}/fail-output.json"
 UNSUPPORTED_ERR="${TEST_TMPDIR}/unsupported.err"
+FAIL_PROVIDER_DIR="${TEST_TMPDIR}/providers"
 
 mkdir -p "${TMP_REPO}"
 git -C "${TMP_REPO}" init -q
@@ -28,6 +30,24 @@ EOF
 cat > "${ACCEPTANCE_FILE}" <<'EOF'
 The provider writes a completed report and all wrapper artifacts exist.
 EOF
+
+mkdir -p "${FAIL_PROVIDER_DIR}"
+cat > "${FAIL_PROVIDER_DIR}/fake-controlled-fail.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+task_dir="$1"
+task_json="$2"
+
+test -d "${task_dir}"
+test -f "${task_json}"
+
+cat > "${task_dir}/report.json" <<'JSON'
+{"status":"failed","summary":"fixture controlled failure","files_changed":[],"tests_run":[],"open_questions":[],"risks":["intentional fixture failure"],"notes":[]}
+JSON
+exit 42
+EOF
+chmod +x "${FAIL_PROVIDER_DIR}/fake-controlled-fail.sh"
 
 AGENT_ORCH_PROVIDER_DIR="${ROOT_DIR}/tests/fixtures/providers" \
   "${ROOT_DIR}/bin/agent-orch" run \
@@ -89,13 +109,40 @@ if AGENT_ORCH_PROVIDER_DIR="${ROOT_DIR}/tests/fixtures/providers" \
 fi
 assert_contains "${UNSUPPORTED_ERR}" '"error":"unsupported_mode"'
 
-PROMPT_TEXT="Implement the prompt supplied task contract."
-AGENT_ORCH_PROVIDER_DIR="${ROOT_DIR}/tests/fixtures/providers" \
+if ! AGENT_ORCH_PROVIDER_DIR="${FAIL_PROVIDER_DIR}" \
   "${ROOT_DIR}/bin/agent-orch" run \
-  --worker fake-success \
+  --worker fake-controlled-fail \
   --repo "${TMP_REPO}" \
-  --prompt "${PROMPT_TEXT}" \
-  --acceptance-file "${ACCEPTANCE_FILE}" > "${PROMPT_OUTPUT}"
+  --task-file "${TASK_FILE}" \
+  --acceptance-file "${ACCEPTANCE_FILE}" > "${FAIL_OUTPUT}"; then
+  printf 'expected controlled worker failure to preserve run result JSON and exit zero\n' >&2
+  exit 1
+fi
+
+FAIL_TASK_DIR="$(python3 - "${FAIL_OUTPUT}" <<'PY'
+import json
+import sys
+
+print(json.load(open(sys.argv[1], encoding="utf-8"))["task_dir"])
+PY
+)"
+assert_json_value "${FAIL_OUTPUT}" "status" "failed"
+assert_file_exists "${FAIL_TASK_DIR}/report.json"
+assert_file_exists "${FAIL_TASK_DIR}/provider-result.json"
+assert_file_exists "${FAIL_TASK_DIR}/git.diffstat"
+assert_json_value "${FAIL_TASK_DIR}/status.json" "status" "failed"
+assert_json_value "${FAIL_TASK_DIR}/provider-result.json" "exit_code" "42"
+
+PROMPT_TEXT="Implement the prompt supplied task contract."
+(
+  cd "${ROOT_DIR}"
+  AGENT_ORCH_PROVIDER_DIR="tests/fixtures/providers" \
+    "${ROOT_DIR}/bin/agent-orch" run \
+    --worker fake-success \
+    --repo "${TMP_REPO}" \
+    --prompt "${PROMPT_TEXT}" \
+    --acceptance-file "${ACCEPTANCE_FILE}"
+) > "${PROMPT_OUTPUT}"
 
 PROMPT_TASK_DIR="$(python3 - "${PROMPT_OUTPUT}" <<'PY'
 import json

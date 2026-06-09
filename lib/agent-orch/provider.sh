@@ -1,13 +1,16 @@
 agent_orch_provider_path() {
   local worker="$1"
   local provider_dir="${AGENT_ORCH_PROVIDER_DIR:-${ROOT_DIR}/tests/fixtures/providers}"
-  local provider_path="${provider_dir}/${worker}.sh"
+  local provider_path
 
   case "${worker}" in
     */*|"")
       die "invalid_worker" "worker must name a fixture provider"
       ;;
   esac
+
+  provider_dir="$(agent_orch_abs_path "${provider_dir}")"
+  provider_path="${provider_dir}/${worker}.sh"
 
   if [[ ! -x "${provider_path}" ]]; then
     die "missing_provider" "fixture provider is not executable: ${provider_path}"
@@ -32,13 +35,14 @@ agent_orch_dispatch_provider() {
   provider_path="$(agent_orch_provider_path "${worker}")"
   started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-  set +e
-  (
+  if (
     cd "${worktree_path}"
     "${provider_path}" "${task_dir}" "${task_json}"
-  ) >"${stdout_path}" 2>"${stderr_path}"
-  exit_code="$?"
-  set -e
+  ) >"${stdout_path}" 2>"${stderr_path}"; then
+    exit_code=0
+  else
+    exit_code="$?"
+  fi
 
   finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
