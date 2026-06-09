@@ -9,6 +9,7 @@ tests=(
   "collect-success.sh"
   "collect-failure.sh"
   "cleanup.sh"
+  "skill-docs.sh"
 )
 
 for test_name in "${tests[@]}"; do

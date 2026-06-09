@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+. "${ROOT_DIR}/tests/test-helpers.sh"
+
+SKILL_DIR="${ROOT_DIR}/skills/coordinating-local-agents"
+SKILL_MD="${SKILL_DIR}/SKILL.md"
+TASK_CONTRACT="${SKILL_DIR}/references/task-contract.md"
+REPORT_SCHEMA="${SKILL_DIR}/references/report-schema.md"
+ROUTING_GUIDELINES="${SKILL_DIR}/references/routing-guidelines.md"
+INSTALL_SCRIPT="${ROOT_DIR}/scripts/install-skill.sh"
+README="${ROOT_DIR}/README.md"
+RUN_ALL="${ROOT_DIR}/tests/agent-orch/run-all.sh"
+
+assert_file_exists "${SKILL_MD}"
+assert_file_exists "${TASK_CONTRACT}"
+assert_file_exists "${REPORT_SCHEMA}"
+assert_file_exists "${ROUTING_GUIDELINES}"
+assert_file_exists "${INSTALL_SCRIPT}"
+
+python3 - "${SKILL_MD}" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+if not text.startswith("---\n"):
+    raise SystemExit("SKILL.md must start with YAML frontmatter")
+
+try:
+    _, frontmatter, body = text.split("---\n", 2)
+except ValueError:
+    raise SystemExit("SKILL.md frontmatter is not closed")
+
+fields = {}
+for line in frontmatter.splitlines():
+    if ":" in line:
+        key, value = line.split(":", 1)
+        fields[key.strip()] = value.strip()
+
+if fields.get("name") != "coordinating-local-agents":
+    raise SystemExit("SKILL.md must define name: coordinating-local-agents")
+
+description = fields.get("description", "")
+if not description:
+    raise SystemExit("SKILL.md must define description")
+
+description_lower = description.lower()
+if "use when" not in description_lower or "delegate" not in description_lower:
+    raise SystemExit("SKILL.md description must be trigger-oriented")
+
+if len(description.split()) > 40:
+    raise SystemExit("SKILL.md description should stay concise")
+
+if not body.strip():
+    raise SystemExit("SKILL.md must include body instructions")
+PY
+
+for command_name in run status collect cleanup; do
+  assert_contains "${SKILL_MD}" "agent-orch ${command_name}"
+done
+
+for reference in task-contract.md report-schema.md routing-guidelines.md; do
+  assert_contains "${SKILL_MD}" "references/${reference}"
+done
+
+assert_contains "${SKILL_MD}" "Real \`claude\` and \`opencode\` adapters"
+assert_contains "${SKILL_MD}" "follow-up work only"
+assert_contains "${SKILL_MD}" "sessions"
+assert_contains "${SKILL_MD}" "\`--mode inplace\`"
+assert_contains "${SKILL_MD}" "\`unsupported_mode\`"
+assert_contains "${SKILL_MD}" "Codex-only"
+
+assert_contains "${SKILL_MD}" "wrapper core"
+assert_contains "${SKILL_MD}" "worktree execution"
+assert_contains "${SKILL_MD}" "task state"
+assert_contains "${SKILL_MD}" "synthetic failed reports"
+assert_contains "${SKILL_MD}" "deterministic fixture providers"
+assert_contains "${SKILL_MD}" "skill install path"
+
+assert_contains "${SKILL_MD}" "\`status\`, \`collect\`, and \`cleanup\` are task-only"
+assert_contains "${SKILL_MD}" "\`--task-id\`"
+assert_contains "${SKILL_MD}" "\`--repo\` or \`--task-dir\` only to locate the task store"
+
+assert_contains "${TASK_CONTRACT}" "\`task_id\`"
+assert_contains "${TASK_CONTRACT}" "\`workspace_path\`"
+assert_contains "${TASK_CONTRACT}" "Work only in \`workspace_path\`"
+assert_contains "${TASK_CONTRACT}" "Do not merge, cherry-pick"
+assert_contains "${TASK_CONTRACT}" "Codex reviews collected artifacts"
+
+assert_contains "${REPORT_SCHEMA}" "\`completed\`"
+assert_contains "${REPORT_SCHEMA}" "\`partial\`"
+assert_contains "${REPORT_SCHEMA}" "\`failed\`"
+assert_contains "${REPORT_SCHEMA}" "Synthetic Failed Reports"
+assert_contains "${REPORT_SCHEMA}" "exits nonzero"
+assert_contains "${REPORT_SCHEMA}" "times out"
+assert_contains "${REPORT_SCHEMA}" "killed by signal"
+assert_contains "${REPORT_SCHEMA}" "omits \`report.json\`"
+assert_contains "${REPORT_SCHEMA}" "invalid JSON"
+assert_contains "${REPORT_SCHEMA}" "wrapper artifact"
+
+assert_contains "${ROUTING_GUIDELINES}" "Codex chooses workers explicitly in v1"
+assert_contains "${ROUTING_GUIDELINES}" "deterministic fixture providers only"
+assert_contains "${ROUTING_GUIDELINES}" "Real \`claude\` and \`opencode\` adapters are follow-up work only"
+assert_contains "${ROUTING_GUIDELINES}" "\`inplace\` execution"
+assert_contains "${ROUTING_GUIDELINES}" "not part of v1"
+
+assert_contains "${INSTALL_SCRIPT}" "ln -s"
+assert_contains "${INSTALL_SCRIPT}" "\${HOME}/.agents/skills"
+assert_contains "${INSTALL_SCRIPT}" "coordinating-local-agents"
+
+setup_temp_dir
+TEST_HOME="${TEST_TMPDIR}/home"
+mkdir -p "${TEST_HOME}"
+HOME="${TEST_HOME}" bash "${INSTALL_SCRIPT}" >/dev/null
+HOME="${TEST_HOME}" bash "${INSTALL_SCRIPT}" >/dev/null
+installed_path="${TEST_HOME}/.agents/skills/coordinating-local-agents"
+if [[ ! -L "${installed_path}" ]]; then
+  printf 'expected installed skill to be a symlink: %s\n' "${installed_path}" >&2
+  exit 1
+fi
+installed_target="$(readlink "${installed_path}")"
+if [[ "${installed_target}" != "${SKILL_DIR}" ]]; then
+  printf 'expected symlink target %s, got %s\n' "${SKILL_DIR}" "${installed_target}" >&2
+  exit 1
+fi
+
+assert_contains "${README}" "bash scripts/install-skill.sh"
+assert_contains "${README}" "~/.agents/skills/coordinating-local-agents"
+assert_contains "${README}" "restart Codex"
+
+assert_contains "${RUN_ALL}" "skill-docs.sh"
+
+printf 'skill-docs.sh: ok\n'
