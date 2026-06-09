@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add a new Codex-facing skill plus a thin local shell wrapper so Codex can delegate bounded work to local Claude Code and OpenCode workers while retaining control of planning, validation, integration, and merge decisions.
+Add a new Codex-facing skill plus a thin local shell wrapper so Codex can delegate bounded work through a provider adapter boundary while retaining control of planning, validation, integration, and merge decisions.
 
 This design is intentionally narrow. Version 1 solves one problem: Codex should be able to hand off implementation, investigation, or validation tasks to a local worker in an isolated workspace, collect a structured result, inspect the resulting diff, and decide what to integrate.
 
@@ -18,6 +18,7 @@ This design is intentionally narrow. Version 1 solves one problem: Codex should 
 
 - No automatic merge or cherry-pick behavior
 - No automatic worker routing in v1
+- No production `claude` or `opencode` adapter implementation in v1
 - No distributed or multi-host orchestration
 - No scheduler, queue manager, or long-running daemon
 - No requirement to use MCP, plugins, or a network protocol in v1
@@ -34,7 +35,7 @@ Codex is the coordinator. It owns:
 - validation of worker output
 - integration and merge decisions
 
-Claude Code and OpenCode act as bounded workers. They do not own final integration.
+Claude Code and OpenCode are future real workers behind this boundary. They do not own final integration.
 
 ### Invocation Model
 
@@ -120,17 +121,17 @@ Non-responsibilities:
 
 ### 3. Provider Layer
 
-Provider-specific scripts sit behind the wrapper:
+The wrapper sits behind a provider adapter boundary.
 
-- `providers/claude.sh`
-- `providers/opencode.sh`
+Version 1 requires deterministic fixture providers that exercise this boundary.
+Real `claude` and `opencode` adapters are follow-up work.
 
 Responsibilities:
 
-- map the normalized task contract to each provider's CLI
-- support one-shot execution
-- support resumable session execution where possible
-- return output in a way the wrapper can capture consistently
+- accept the normalized task contract
+- run within the assigned workspace
+- produce or fail to produce report artifacts in ways the wrapper can capture consistently
+- support deterministic test scenarios for success, missing report, invalid report, timeout, and signal termination
 
 ## CLI Surface
 
@@ -151,6 +152,8 @@ Version 1 required scope is narrower:
 - `agent-orch status`
 - `agent-orch collect`
 - `agent-orch cleanup`
+- fixture providers that exercise the provider adapter boundary
+- skill installation via `~/.agents/skills/`
 
 `session start` and `session send` are planned follow-up commands, not part of the first required deliverable.
 
@@ -160,7 +163,7 @@ Default mode for v1. Executes a one-shot task.
 
 Expected inputs:
 
-- `--worker claude|opencode`
+- `--worker <provider>`
 - `--repo <path>`
 - `--mode <mode>` optional, default `worktree`
 - exactly one of `--task-file <path>` or `--prompt <text>`
@@ -265,6 +268,7 @@ Each task should have a dedicated state directory. A reasonable default is:
 Here `<repo>` means the original coordinator-provided repository root passed to `--repo`, never the generated worker worktree path. Task state must survive worker worktree cleanup.
 
 If `--output-dir` is provided, it overrides the default repo-local task root. If omitted, repo-local storage is the default.
+Tasks created under `--output-dir` should later be addressed via `--task-dir`, not `--repo`.
 
 Version 1 task directories should include:
 
@@ -418,9 +422,6 @@ Wrapper:
 ```text
 ~/.codex/tools/agent-orch/
   agent-orch
-  providers/
-    claude.sh
-    opencode.sh
   lib/
     worktree.sh
     task-store.sh
@@ -431,14 +432,14 @@ The exact paths can change during implementation, but the separation of responsi
 
 ## Risks
 
-- Provider CLIs may differ substantially in session semantics
+- Real provider CLIs may differ substantially in session semantics
 - Structured report generation may need provider-specific prompt tuning
 - Worktree cleanup can become messy without explicit lifecycle rules
 - Delegation overhead may outweigh benefits for small tasks
 
 ## Open Questions Deferred to Planning
 
-- Exact command-line flags and output parsing for `claude` and `opencode`
+- Exact command-line flags and output parsing for real `claude` and `opencode` adapters
 - Whether report schema validation lives in shell, `jq`, or a small helper script
 - Whether task state should live under repo-local storage or a global cache with repo references
 - How much session support is realistically implementable after the v1 one-shot flow is stable
@@ -453,6 +454,8 @@ Recommended order:
 2. implement one-shot `run` with `worktree` mode
 3. add structured report capture and `collect`
 4. add `status` and `cleanup`
-5. optionally add minimal session support as follow-up work
-6. optionally add `inplace` mode as follow-up work
-7. revisit optional routing rules only after explicit dispatch is stable
+5. add deterministic fixture providers for the adapter boundary
+6. optionally add minimal session support as follow-up work
+7. optionally add `inplace` mode as follow-up work
+8. optionally add real `claude` and `opencode` adapters as follow-up work
+9. revisit optional routing rules only after explicit dispatch is stable
