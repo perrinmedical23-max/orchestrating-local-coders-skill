@@ -1,0 +1,428 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "${ROOT_DIR}/lib/agent-orch/common.sh"
+. "${ROOT_DIR}/lib/agent-orch/task-store.sh"
+. "${ROOT_DIR}/lib/agent-orch/worktree.sh"
+. "${ROOT_DIR}/lib/agent-orch/provider.sh"
+
+provider_result_needs_synthetic_report() {
+  local provider_result_path="$1"
+  local report_path="$2"
+  python3 - "${provider_result_path}" "${report_path}" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        result = json.load(handle)
+    with open(sys.argv[2], "r", encoding="utf-8") as handle:
+        report = json.load(handle)
+except Exception:
+    sys.exit(1)
+
+if result.get("timed_out") or result.get("signal") is not None:
+    sys.exit(0)
+if result.get("exit_code") not in (None, 0) and report.get("status") == "completed":
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+repair_report_if_needed() {
+  local task_dir="$1"
+  local report_path="${task_dir}/report.json"
+  local provider_result_path="${task_dir}/provider-result.json"
+  local stdout_path="${task_dir}/stdout.log"
+  local stderr_path="${task_dir}/stderr.log"
+  local raw_report_path="${task_dir}/report.raw"
+
+  if [[ ! -f "${report_path}" ]]; then
+    python3 "${ROOT_DIR}/lib/agent-orch/report.py" synthesize-failure \
+      "${report_path}" \
+      "${provider_result_path}" \
+      "${stdout_path}" \
+      "${stderr_path}"
+    return
+  fi
+
+  if ! python3 "${ROOT_DIR}/lib/agent-orch/report.py" validate "${report_path}" >/dev/null 2>&1; then
+    if [[ ! -f "${raw_report_path}" ]]; then
+      mv -f "${report_path}" "${raw_report_path}"
+    fi
+    python3 "${ROOT_DIR}/lib/agent-orch/report.py" synthesize-failure \
+      "${report_path}" \
+      "${provider_result_path}" \
+      "${stdout_path}" \
+      "${stderr_path}" \
+      "${raw_report_path}"
+    return
+  fi
+
+  if provider_result_needs_synthetic_report "${provider_result_path}" "${report_path}"; then
+    python3 "${ROOT_DIR}/lib/agent-orch/report.py" synthesize-failure \
+      "${report_path}" \
+      "${provider_result_path}" \
+      "${stdout_path}" \
+      "${stderr_path}"
+  fi
+}
+
+run_command() {
+  local worker=""
+  local repo=""
+  local mode="worktree"
+  local task_file=""
+  local prompt=""
+  local acceptance_file=""
+  local output_dir=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --worker)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--worker requires a value"
+        worker="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      --mode)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--mode requires a value"
+        mode="$2"
+        shift 2
+        ;;
+      --task-file)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-file requires a value"
+        task_file="$2"
+        shift 2
+        ;;
+      --prompt)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--prompt requires a value"
+        prompt="$2"
+        shift 2
+        ;;
+      --acceptance-file)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--acceptance-file requires a value"
+        acceptance_file="$2"
+        shift 2
+        ;;
+      --output-dir)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--output-dir requires a value"
+        output_dir="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown run argument: $1"
+        ;;
+    esac
+  done
+
+  if [[ "${mode}" != "worktree" ]]; then
+    die "unsupported_mode" "version 1 supports only --mode worktree"
+  fi
+
+  [[ -n "${worker}" ]] || die "missing_arg" "--worker is required"
+  [[ -n "${repo}" ]] || die "missing_arg" "--repo is required"
+  [[ -n "${acceptance_file}" ]] || die "missing_arg" "--acceptance-file is required"
+  if [[ -n "${task_file}" && -n "${prompt}" ]]; then
+    die "invalid_args" "provide exactly one of --task-file or --prompt"
+  fi
+  if [[ -z "${task_file}" && -z "${prompt}" ]]; then
+    die "invalid_args" "provide exactly one of --task-file or --prompt"
+  fi
+  if [[ -n "${task_file}" && ! -f "${task_file}" ]]; then
+    die "missing_file" "task file does not exist: ${task_file}"
+  fi
+  if [[ ! -f "${acceptance_file}" ]]; then
+    die "missing_file" "acceptance file does not exist: ${acceptance_file}"
+  fi
+
+  local repo_path
+  repo_path="$(agent_orch_resolve_repo "${repo}")"
+
+  local task_id
+  task_id="$(agent_orch_new_task_id)"
+
+  local task_dir
+  task_dir="$(agent_orch_create_task_dir "${repo_path}" "${task_id}" "${output_dir}")"
+
+  local metadata_path="${task_dir}/metadata.json"
+  local worktree_path
+  worktree_path="$(agent_orch_create_worktree "${repo_path}" "${task_id}" "${metadata_path}")"
+
+  local base_rev
+  base_rev="$(agent_orch_json_value "${metadata_path}" "base_rev")"
+
+  local task_statement
+  local task_file_path=""
+  if [[ -n "${task_file}" ]]; then
+    task_file_path="$(agent_orch_abs_path "${task_file}")"
+    task_statement="$(cat "${task_file}")"
+  else
+    task_statement="${prompt}"
+  fi
+
+  local acceptance_file_path
+  local acceptance_criteria
+  acceptance_file_path="$(agent_orch_abs_path "${acceptance_file}")"
+  acceptance_criteria="$(cat "${acceptance_file}")"
+
+  local task_json="${task_dir}/task.json"
+  agent_orch_write_task_json \
+    "${task_json}" \
+    "${task_id}" \
+    "${worker}" \
+    "${mode}" \
+    "${repo_path}" \
+    "${worktree_path}" \
+    "${task_statement}" \
+    "${task_file_path}" \
+    "${prompt}" \
+    "${acceptance_file_path}" \
+    "${acceptance_criteria}"
+
+  agent_orch_write_status_json "${task_dir}/status.json" "${task_id}" "running" "${worker}" "${mode}" "${repo_path}" "${worktree_path}" "${task_dir}/report.json"
+
+  local exit_code
+  set +e
+  agent_orch_dispatch_provider "${worker}" "${task_dir}" "${task_json}" "${worktree_path}"
+  exit_code="$?"
+  set -e
+
+  repair_report_if_needed "${task_dir}"
+
+  local report_status="failed"
+  if [[ -f "${task_dir}/report.json" ]]; then
+    report_status="$(agent_orch_report_status "${task_dir}/report.json")"
+  fi
+  if [[ "${exit_code}" -ne 0 && "${report_status}" == "completed" ]]; then
+    report_status="failed"
+  fi
+
+  agent_orch_write_status_json "${task_dir}/status.json" "${task_id}" "${report_status}" "${worker}" "${mode}" "${repo_path}" "${worktree_path}" "${task_dir}/report.json"
+  git -C "${worktree_path}" diff --stat "${base_rev}" -- > "${task_dir}/git.diffstat"
+  cp "${task_dir}/git.diffstat" "${task_dir}/diff_summary"
+
+  agent_orch_print_run_result "${task_id}" "${report_status}" "${task_dir}" "${task_dir}/report.json"
+}
+
+status_command() {
+  local task_id=""
+  local repo=""
+  local task_dir=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --task-id)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-id requires a value"
+        task_id="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      --task-dir)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-dir requires a value"
+        task_dir="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown status argument: $1"
+        ;;
+    esac
+  done
+
+  local resolved_task_dir
+  resolved_task_dir="$(agent_orch_resolve_task_dir "${task_id}" "${repo}" "${task_dir}")"
+  agent_orch_print_status_result "${resolved_task_dir}"
+}
+
+collect_command() {
+  local task_id=""
+  local repo=""
+  local task_dir=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --task-id)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-id requires a value"
+        task_id="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      --task-dir)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-dir requires a value"
+        task_dir="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown collect argument: $1"
+        ;;
+    esac
+  done
+
+  local resolved_task_dir
+  resolved_task_dir="$(agent_orch_resolve_task_dir "${task_id}" "${repo}" "${task_dir}")"
+  repair_report_if_needed "${resolved_task_dir}"
+
+  local report_status
+  report_status="$(agent_orch_report_status "${resolved_task_dir}/report.json")"
+  agent_orch_write_status_json \
+    "${resolved_task_dir}/status.json" \
+    "$(agent_orch_json_value "${resolved_task_dir}/status.json" "task_id")" \
+    "${report_status}" \
+    "$(agent_orch_json_value "${resolved_task_dir}/status.json" "worker")" \
+    "$(agent_orch_json_value "${resolved_task_dir}/status.json" "mode")" \
+    "$(agent_orch_json_value "${resolved_task_dir}/status.json" "repo_path")" \
+    "$(agent_orch_json_value "${resolved_task_dir}/status.json" "worktree_path")" \
+    "${resolved_task_dir}/report.json"
+
+  python3 - "${resolved_task_dir}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+task_dir = Path(sys.argv[1])
+with (task_dir / "status.json").open("r", encoding="utf-8") as handle:
+    status = json.load(handle)
+with (task_dir / "metadata.json").open("r", encoding="utf-8") as handle:
+    metadata = json.load(handle)
+with (task_dir / "report.json").open("r", encoding="utf-8") as handle:
+    report = json.load(handle)
+
+diff_summary_path = task_dir / "diff_summary"
+diff_summary = ""
+if diff_summary_path.exists():
+    diff_summary = diff_summary_path.read_text(encoding="utf-8")
+
+payload = {
+    "task_id": status["task_id"],
+    "report_path": str(task_dir / "report.json"),
+    "task_dir": str(task_dir),
+    "worktree_path": metadata["worktree_path"],
+    "changed_files": report.get("files_changed", []),
+    "diff_summary": diff_summary,
+    "tests_run": report.get("tests_run", []),
+}
+
+print(json.dumps(payload, separators=(",", ":")))
+PY
+}
+
+cleanup_command() {
+  local task_id=""
+  local repo=""
+  local task_dir=""
+  local remove_worktree=0
+  local remove_state=0
+  local remove_all=0
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --task-id)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-id requires a value"
+        task_id="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      --task-dir)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-dir requires a value"
+        task_dir="$2"
+        shift 2
+        ;;
+      --remove-worktree)
+        remove_worktree=1
+        shift
+        ;;
+      --remove-state)
+        remove_state=1
+        shift
+        ;;
+      --all)
+        remove_all=1
+        shift
+        ;;
+      *)
+        die "unknown_arg" "unknown cleanup argument: $1"
+        ;;
+    esac
+  done
+
+  local removal_count=$((remove_worktree + remove_state + remove_all))
+  if [[ "${removal_count}" -ne 1 ]]; then
+    die "invalid_args" "provide exactly one deletion target: --remove-worktree, --remove-state, or --all"
+  fi
+
+  local resolved_task_dir
+  resolved_task_dir="$(agent_orch_resolve_task_dir "${task_id}" "${repo}" "${task_dir}")"
+
+  local repo_path
+  local worktree_path
+  repo_path="$(agent_orch_json_value "${resolved_task_dir}/metadata.json" "repo_path")"
+  worktree_path="$(agent_orch_json_value "${resolved_task_dir}/metadata.json" "worktree_path")"
+
+  if [[ "${remove_worktree}" -eq 1 || "${remove_all}" -eq 1 ]]; then
+    agent_orch_remove_worktree "${repo_path}" "${worktree_path}"
+  fi
+  if [[ "${remove_state}" -eq 1 || "${remove_all}" -eq 1 ]]; then
+    rm -rf "${resolved_task_dir}"
+  fi
+
+  python3 - \
+    "${task_id}" \
+    "${resolved_task_dir}" \
+    "${worktree_path}" \
+    "${remove_worktree}" \
+    "${remove_state}" \
+    "${remove_all}" <<'PY'
+import json
+import sys
+
+task_id, task_dir, worktree_path, remove_worktree, remove_state, remove_all = sys.argv[1:]
+print(json.dumps({
+    "task_id": task_id,
+    "status": "cleaned",
+    "task_dir": task_dir,
+    "worktree_path": worktree_path,
+    "removed": {
+        "worktree": remove_worktree == "1" or remove_all == "1",
+        "state": remove_state == "1" or remove_all == "1",
+    },
+}, separators=(",", ":")))
+PY
+}
+
+command_name="${1:-}"
+shift || true
+
+case "${command_name}" in
+  run)
+    run_command "$@"
+    ;;
+  status)
+    status_command "$@"
+    ;;
+  collect)
+    collect_command "$@"
+    ;;
+  cleanup)
+    cleanup_command "$@"
+    ;;
+  *)
+    die "unknown_command" "expected one of: run, status, collect, cleanup"
+    ;;
+esac
