@@ -120,6 +120,23 @@ ALL_WORKTREE_PATH="$(json_field "${ALL_TASK_DIR}/metadata.json" "worktree_path")
 assert_path_missing "${ALL_WORKTREE_PATH}"
 assert_path_missing "${ALL_TASK_DIR}"
 
+STALE_REPO="${TEST_TMPDIR}/stale-repo"
+STALE_OUTPUT="${TEST_TMPDIR}/stale-run.json"
+create_repo "${STALE_REPO}"
+run_fixture_task "${STALE_REPO}" "${STALE_OUTPUT}"
+STALE_TASK_ID="$(json_field "${STALE_OUTPUT}" "task_id")"
+STALE_TASK_DIR="$(json_field "${STALE_OUTPUT}" "task_dir")"
+STALE_WORKTREE_PATH="$(json_field "${STALE_TASK_DIR}/metadata.json" "worktree_path")"
+rm -rf "${STALE_WORKTREE_PATH}"
+
+"${ROOT_DIR}/bin/agent-orch" cleanup \
+  --task-id "${STALE_TASK_ID}" \
+  --repo "${STALE_REPO}" \
+  --all > "${TEST_TMPDIR}/stale-cleanup.json"
+
+assert_path_missing "${STALE_WORKTREE_PATH}"
+assert_path_missing "${STALE_TASK_DIR}"
+
 if "${ROOT_DIR}/bin/agent-orch" cleanup \
   --task-id "${REMOVE_WORKTREE_TASK_ID}" \
   --repo "${REMOVE_WORKTREE_REPO}" > "${MISSING_TARGET_OUTPUT}" 2>&1; then
