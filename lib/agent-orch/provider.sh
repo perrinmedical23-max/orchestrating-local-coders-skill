@@ -28,43 +28,13 @@ agent_orch_dispatch_provider() {
   local stdout_path="${task_dir}/stdout.log"
   local stderr_path="${task_dir}/stderr.log"
   local result_path="${task_dir}/provider-result.json"
-  local started_at
-  local finished_at
-  local exit_code
 
   provider_path="$(agent_orch_provider_path "${worker}")"
-  started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-  if (
-    cd "${worktree_path}"
-    "${provider_path}" "${task_dir}" "${task_json}"
-  ) >"${stdout_path}" 2>"${stderr_path}"; then
-    exit_code=0
-  else
-    exit_code="$?"
-  fi
-
-  finished_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-  python3 - "$result_path" "$worker" "$provider_path" "$exit_code" "$started_at" "$finished_at" <<'PY'
-import json
-import sys
-
-result_path, worker, provider_path, exit_code, started_at, finished_at = sys.argv[1:]
-payload = {
-    "worker": worker,
-    "provider_path": provider_path,
-    "exit_code": int(exit_code),
-    "signal": None,
-    "timed_out": False,
-    "started_at": started_at,
-    "finished_at": finished_at,
-}
-
-with open(result_path, "w", encoding="utf-8") as handle:
-    json.dump(payload, handle, indent=2)
-    handle.write("\n")
-PY
-
-  return "${exit_code}"
+  python3 "${ROOT_DIR}/lib/agent-orch/launch.py" \
+    --provider "${worker}" \
+    --cwd "${worktree_path}" \
+    --stdout "${stdout_path}" \
+    --stderr "${stderr_path}" \
+    --result "${result_path}" \
+    -- "${provider_path}" "${task_dir}" "${task_json}"
 }

@@ -7,6 +7,61 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "${ROOT_DIR}/lib/agent-orch/worktree.sh"
 . "${ROOT_DIR}/lib/agent-orch/provider.sh"
 
+provider_result_needs_synthetic_report() {
+  local provider_result_path="$1"
+  python3 - "${provider_result_path}" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        result = json.load(handle)
+except Exception:
+    sys.exit(1)
+
+if result.get("timed_out") or result.get("signal") is not None:
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
+repair_report_if_needed() {
+  local task_dir="$1"
+  local report_path="${task_dir}/report.json"
+  local provider_result_path="${task_dir}/provider-result.json"
+  local stdout_path="${task_dir}/stdout.log"
+  local stderr_path="${task_dir}/stderr.log"
+  local raw_report_path="${task_dir}/report.raw"
+
+  if [[ ! -f "${report_path}" ]]; then
+    python3 "${ROOT_DIR}/lib/agent-orch/report.py" synthesize-failure \
+      "${report_path}" \
+      "${provider_result_path}" \
+      "${stdout_path}" \
+      "${stderr_path}"
+    return
+  fi
+
+  if ! python3 "${ROOT_DIR}/lib/agent-orch/report.py" validate "${report_path}" >/dev/null 2>&1; then
+    mv -f "${report_path}" "${raw_report_path}"
+    python3 "${ROOT_DIR}/lib/agent-orch/report.py" synthesize-failure \
+      "${report_path}" \
+      "${provider_result_path}" \
+      "${stdout_path}" \
+      "${stderr_path}" \
+      "${raw_report_path}"
+    return
+  fi
+
+  if provider_result_needs_synthetic_report "${provider_result_path}"; then
+    python3 "${ROOT_DIR}/lib/agent-orch/report.py" synthesize-failure \
+      "${report_path}" \
+      "${provider_result_path}" \
+      "${stdout_path}" \
+      "${stderr_path}"
+  fi
+}
+
 run_command() {
   local worker=""
   local repo=""
@@ -131,6 +186,8 @@ run_command() {
   exit_code="$?"
   set -e
 
+  repair_report_if_needed "${task_dir}"
+
   local report_status="failed"
   if [[ -f "${task_dir}/report.json" ]]; then
     report_status="$(agent_orch_report_status "${task_dir}/report.json")"
@@ -179,6 +236,70 @@ status_command() {
   agent_orch_print_status_result "${resolved_task_dir}"
 }
 
+collect_command() {
+  local task_id=""
+  local repo=""
+  local task_dir=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --task-id)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-id requires a value"
+        task_id="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      --task-dir)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-dir requires a value"
+        task_dir="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown collect argument: $1"
+        ;;
+    esac
+  done
+
+  local resolved_task_dir
+  resolved_task_dir="$(agent_orch_resolve_task_dir "${task_id}" "${repo}" "${task_dir}")"
+  repair_report_if_needed "${resolved_task_dir}"
+
+  python3 - "${resolved_task_dir}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+task_dir = Path(sys.argv[1])
+with (task_dir / "status.json").open("r", encoding="utf-8") as handle:
+    status = json.load(handle)
+with (task_dir / "metadata.json").open("r", encoding="utf-8") as handle:
+    metadata = json.load(handle)
+with (task_dir / "report.json").open("r", encoding="utf-8") as handle:
+    report = json.load(handle)
+
+diff_summary_path = task_dir / "diff_summary"
+diff_summary = ""
+if diff_summary_path.exists():
+    diff_summary = diff_summary_path.read_text(encoding="utf-8")
+
+payload = {
+    "task_id": status["task_id"],
+    "report_path": str(task_dir / "report.json"),
+    "task_dir": str(task_dir),
+    "worktree_path": metadata["worktree_path"],
+    "changed_files": report.get("files_changed", []),
+    "diff_summary": diff_summary,
+    "tests_run": report.get("tests_run", []),
+}
+
+print(json.dumps(payload, separators=(",", ":")))
+PY
+}
+
 command_name="${1:-}"
 shift || true
 
@@ -189,7 +310,10 @@ case "${command_name}" in
   status)
     status_command "$@"
     ;;
-  collect|cleanup)
+  collect)
+    collect_command "$@"
+    ;;
+  cleanup)
     die "not_implemented" "subcommand ${command_name} is not implemented yet"
     ;;
   *)
