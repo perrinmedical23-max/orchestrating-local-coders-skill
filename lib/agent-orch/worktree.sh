@@ -33,3 +33,15 @@ PY
 
   printf '%s\n' "${worktree_path}"
 }
+
+agent_orch_remove_worktree() {
+  local repo_path="$1"
+  local worktree_path="$2"
+
+  if [[ ! -d "${worktree_path}" ]]; then
+    die "missing_worktree" "worktree does not exist: ${worktree_path}"
+  fi
+  if ! git -C "${repo_path}" worktree remove --force "${worktree_path}"; then
+    die "worktree_remove_failed" "failed to remove worktree: ${worktree_path}"
+  fi
+}
