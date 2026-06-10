@@ -59,6 +59,7 @@ def synthesize_failure(report_path, provider_result_path, stdout_path, stderr_pa
             "exit_code": provider_result.get("exit_code"),
             "signal": provider_result.get("signal"),
             "timed_out": bool(provider_result.get("timed_out", False)),
+            "provider_result_path": str(Path(provider_result_path)),
             "stdout_path": str(Path(stdout_path)),
             "stderr_path": str(Path(stderr_path)),
             "raw_report_path": raw_path,

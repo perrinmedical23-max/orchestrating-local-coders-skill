@@ -20,6 +20,7 @@ tests=(
   "loop-review.sh"
   "loop-decide.sh"
   "loop-auto-fix.sh"
+  "loop-failure.sh"
 )
 
 for test_name in "${tests[@]}"; do

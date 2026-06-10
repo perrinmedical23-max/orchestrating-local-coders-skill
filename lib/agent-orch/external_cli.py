@@ -31,6 +31,7 @@ def print_error(exc):
     payload = {
         "status": "failed",
         "error": exc.code,
+        "error_code": exc.code,
         "message": exc.message,
     }
     if exc.details:
@@ -242,6 +243,40 @@ def read_report_status(report_path):
         return "failed"
 
 
+def read_report_error_code(report_path):
+    try:
+        with report_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return None
+    value = payload.get("error_code")
+    return value if isinstance(value, str) and value else None
+
+
+def provider_exited_nonzero(provider_result_path):
+    try:
+        with provider_result_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return False
+    return payload.get("exit_code") not in (None, 0)
+
+
+def worker_error_code(report_path, provider_result_path):
+    error_code = read_report_error_code(report_path)
+    if error_code:
+        return error_code
+
+    report_status = read_report_status(report_path)
+    if not provider_exited_nonzero(provider_result_path):
+        return None
+    if report_status == "partial":
+        return "worker_partial"
+    if report_status == "failed":
+        return "worker_declared_failure"
+    return None
+
+
 def read_changed_files(report_path):
     try:
         with report_path.open("r", encoding="utf-8") as handle:
@@ -268,6 +303,102 @@ def write_diff_summary(worktree_path, base_rev, iteration_dir):
     )
     untracked = "".join(f"?? {line}\n" for line in untracked_result.stdout.splitlines())
     (iteration_dir / "diff_summary").write_text(diff_result.stdout + untracked, encoding="utf-8")
+
+
+def git_status_snapshot(repo_path, ignored_prefixes=None):
+    ignored = tuple(prefix.rstrip("/") + "/" for prefix in (ignored_prefixes or []))
+    result = subprocess.run(
+        ["git", "-C", str(repo_path), "status", "--porcelain=v1", "--untracked-files=all"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    entries = []
+    for line in result.stdout.splitlines():
+        path = line[3:] if len(line) > 3 else ""
+        if any(path == prefix[:-1] or path.startswith(prefix) for prefix in ignored):
+            continue
+        entries.append(line)
+    return entries
+
+
+def audit_workspace(repo_path, worktree_path, base_rev, loop_id, iteration_dir, coordinator_status_before):
+    ignored_prefix = f".superpowers/agent-orch/loops/{loop_id}"
+    coordinator_status = git_status_snapshot(repo_path, [ignored_prefix])
+    worktree_diff = subprocess.run(
+        ["git", "-C", str(worktree_path), "diff", "--name-status", base_rev, "--"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    worktree_untracked = subprocess.run(
+        ["git", "-C", str(worktree_path), "ls-files", "--others", "--exclude-standard"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    payload = {
+        "status": "passed",
+        "error_code": None,
+        "coordinator_repo_path": str(repo_path),
+        "worktree_path": str(worktree_path),
+        "coordinator_status_before": coordinator_status_before,
+        "coordinator_status_after": coordinator_status,
+        "worktree_diff": worktree_diff.stdout.splitlines(),
+        "worktree_untracked": worktree_untracked.stdout.splitlines(),
+    }
+    if coordinator_status != coordinator_status_before:
+        payload["status"] = "failed"
+        payload["error_code"] = "workspace_violation"
+    write_json(iteration_dir / "workspace-audit.json", payload)
+    return payload
+
+
+def write_workspace_violation_report(iteration_dir, audit_payload):
+    report_path = iteration_dir / "report.json"
+    provider_result_path = iteration_dir / "provider-result.json"
+    stdout_path = iteration_dir / "stdout.log"
+    stderr_path = iteration_dir / "stderr.log"
+    payload = {
+        "status": "failed",
+        "error_code": "workspace_violation",
+        "summary": "worker modified the coordinator checkout outside the assigned workspace",
+        "files_changed": [],
+        "tests_run": [],
+        "open_questions": [],
+        "risks": ["workspace_violation"],
+        "notes": ["see workspace-audit.json", "see provider-result.json", "see stdout.log", "see stderr.log"],
+        "diagnostics": {
+            "report_path": str(report_path),
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "provider_result_path": str(provider_result_path),
+            "workspace_audit_path": str(iteration_dir / "workspace-audit.json"),
+            "coordinator_status_before": audit_payload.get("coordinator_status_before", []),
+            "coordinator_status_after": audit_payload.get("coordinator_status_after", []),
+        },
+    }
+    write_json(report_path, payload)
+
+
+def iteration_artifact_paths(iteration_dir):
+    paths = {
+        "iteration_dir": str(iteration_dir),
+        "report_path": str(iteration_dir / "report.json"),
+        "stdout_path": str(iteration_dir / "stdout.log"),
+        "stderr_path": str(iteration_dir / "stderr.log"),
+        "provider_result_path": str(iteration_dir / "provider-result.json"),
+        "workspace_audit_path": str(iteration_dir / "workspace-audit.json"),
+    }
+    raw_report_path = iteration_dir / "report.raw"
+    if raw_report_path.exists():
+        paths["raw_report_path"] = str(raw_report_path)
+    return paths
 
 
 def run_launch(provider, command, worktree_path, iteration_dir):
@@ -406,11 +537,26 @@ def run_iteration(
             "worktree_path": str(worktree_path),
         },
     )
+    coordinator_status_before = git_status_snapshot(
+        repo_path,
+        [f".superpowers/agent-orch/loops/{loop_id}"],
+    )
     run_launch(provider, command, worktree_path, iteration_dir)
+    workspace_audit = audit_workspace(
+        repo_path,
+        worktree_path,
+        base_rev,
+        loop_id,
+        iteration_dir,
+        coordinator_status_before,
+    )
     repair_report_if_needed(iteration_dir)
+    if workspace_audit.get("error_code") == "workspace_violation":
+        write_workspace_violation_report(iteration_dir, workspace_audit)
     write_diff_summary(worktree_path, base_rev, iteration_dir)
 
     report_status = read_report_status(report_path)
+    error_code = worker_error_code(report_path, iteration_dir / "provider-result.json")
     changed_files = read_changed_files(report_path)
     update_loop_state(
         loop_path,
@@ -421,7 +567,9 @@ def run_iteration(
             "role": role,
             "worktree_path": str(worktree_path),
             "worker_report_status": report_status,
+            "error_code": error_code,
             "report_path": str(report_path),
+            "workspace_audit_path": str(iteration_dir / "workspace-audit.json"),
         },
     )
     return {
@@ -429,7 +577,9 @@ def run_iteration(
         "worktree_path": worktree_path,
         "report_path": report_path,
         "report_status": report_status,
+        "error_code": error_code,
         "changed_files": changed_files,
+        "artifact_paths": iteration_artifact_paths(iteration_dir),
     }
 
 
@@ -488,6 +638,11 @@ def start_command(args):
     except provider_config.AgentOrchError as exc:
         update_loop_state(loop_path, "failed")
         details = dict(exc.details)
+        readiness = details.get("readiness")
+        if readiness is not None:
+            readiness_path = loop_dir / "readiness.json"
+            write_json(readiness_path, readiness)
+            details["readiness_path"] = str(readiness_path)
         details.update({"loop_id": loop_id, "loop_dir": str(loop_dir)})
         fail(exc.code, exc.message, details)
     except AgentOrchError as exc:
@@ -518,7 +673,9 @@ def start_command(args):
             "worktree_path": str(result["worktree_path"]),
             "report_path": str(result["report_path"]),
             "report_status": result["report_status"],
+            "error_code": result["error_code"] if result["error_code"] else None,
             "changed_files": result["changed_files"],
+            **result["artifact_paths"],
         }
     )
     return 0
@@ -642,6 +799,11 @@ def continue_command(args):
     except provider_config.AgentOrchError as exc:
         update_loop_state(loop_path, "failed")
         details = dict(exc.details)
+        readiness = details.get("readiness")
+        if readiness is not None:
+            readiness_path = loop_dir / f"readiness-{next_iteration}.json"
+            write_json(readiness_path, readiness)
+            details["readiness_path"] = str(readiness_path)
         details.update({"loop_id": loop_id, "loop_dir": str(loop_dir), "iteration": next_iteration})
         fail(exc.code, exc.message, details)
     except AgentOrchError as exc:
@@ -672,8 +834,10 @@ def continue_command(args):
             "worktree_path": str(result["worktree_path"]),
             "report_path": str(result["report_path"]),
             "report_status": result["report_status"],
+            "error_code": result["error_code"] if result["error_code"] else None,
             "changed_files": result["changed_files"],
             "consumed_next_task_path": str(consumed_path),
+            **result["artifact_paths"],
         }
     )
     return 0

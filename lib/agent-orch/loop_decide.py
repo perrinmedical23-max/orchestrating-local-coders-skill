@@ -27,6 +27,7 @@ def print_error(exc):
     payload = {
         "status": "failed",
         "error": exc.code,
+        "error_code": exc.code,
         "message": exc.message,
     }
     if exc.details:
@@ -273,6 +274,19 @@ def archive_stale_next_task(iteration_dir, decision):
     return stale_path
 
 
+def iteration_artifact_paths(iteration_dir):
+    paths = {
+        "stdout_path": str(iteration_dir / "stdout.log"),
+        "stderr_path": str(iteration_dir / "stderr.log"),
+        "provider_result_path": str(iteration_dir / "provider-result.json"),
+        "workspace_audit_path": str(iteration_dir / "workspace-audit.json"),
+    }
+    raw_report_path = iteration_dir / "report.raw"
+    if raw_report_path.is_file():
+        paths["raw_report_path"] = str(raw_report_path)
+    return paths
+
+
 def build_next_task(loop_payload, loop_dir, iteration, iteration_dir, reviews, report_payload):
     first_task = read_json(loop_dir / "iterations" / "1" / "task.json", "task_invalid", "initial task")
     current_task = read_json(iteration_dir / "task.json", "task_invalid", "current task")
@@ -337,8 +351,10 @@ def decide_command(args):
         if review_payload is None:
             missing_reviewers.append(reviewer)
         else:
+            raw_review_path = reviews_dir / f"{reviewer}.raw"
             reviews[reviewer] = {
                 "path": str(review_path),
+                "raw_path": str(raw_review_path) if raw_review_path.is_file() else None,
                 "payload": review_payload,
                 "status": review_payload["status"],
             }
@@ -370,10 +386,17 @@ def decide_command(args):
         for reviewer in REQUIRED_REVIEWERS
         if reviewer_statuses[reviewer] == "blocked"
     ]
+    workspace_violation = report_payload.get("error_code") == "workspace_violation" or any(
+        reviews[reviewer]["payload"].get("error_code") == "workspace_violation"
+        for reviewer in REQUIRED_REVIEWERS
+    )
     next_task_path = None
     blocker_summaries = []
     signature = None
-    if all(status == "passed" for status in reviewer_statuses.values()):
+    if workspace_violation:
+        state = "manual_gate"
+        decision = "workspace_violation"
+    elif all(status == "passed" for status in reviewer_statuses.values()):
         state = "completed"
         decision = "completed"
     elif needs_human_reviewers:
@@ -405,17 +428,42 @@ def decide_command(args):
         stale_next_task_path = archive_stale_next_task(iteration_dir, decision)
 
     decided_at = utc_now()
+    error_code = None
+    if decision == "workspace_violation":
+        error_code = "workspace_violation"
+    elif decision == "manual_gate" and needs_human_reviewers:
+        error_code = next(
+            (
+                reviews[reviewer]["payload"].get("error_code")
+                for reviewer in needs_human_reviewers
+                if reviews[reviewer]["payload"].get("error_code")
+            ),
+            "needs_human",
+        )
+    elif decision == "manual_gate":
+        error_code = "review_blocked"
+    elif decision in {"repeated_blocker", "max_iterations_reached"}:
+        error_code = decision
     payload = {
         "loop_id": loop_payload["loop_id"],
         "state": state,
         "current_iteration": iteration,
         "decision": decision,
+        "error_code": error_code,
+        "loop_dir": str(loop_dir),
+        "iteration_dir": str(iteration_dir),
         "blocking_reviewers": blocking_reviewers,
         "next_task_path": str(next_task_path) if next_task_path else None,
         "decided_at": decided_at,
         "report_path": str(report_path),
+        **iteration_artifact_paths(iteration_dir),
         "report_status": report_payload.get("status"),
         "review_paths": {reviewer: reviews[reviewer]["path"] for reviewer in REQUIRED_REVIEWERS},
+        "raw_review_paths": {
+            reviewer: reviews[reviewer]["raw_path"]
+            for reviewer in REQUIRED_REVIEWERS
+            if reviews[reviewer]["raw_path"]
+        },
         "reviewer_statuses": reviewer_statuses,
         "decision_path": str(decision_path),
         "blocker_summaries": blocker_summaries,

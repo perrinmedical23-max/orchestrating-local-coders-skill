@@ -18,6 +18,7 @@ esac
 
 report_path=""
 prompt_file=""
+task_json=""
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --report|--report-path)
@@ -28,6 +29,11 @@ while [[ "$#" -gt 0 ]]; do
     --prompt-file)
       [[ "$#" -ge 2 ]] || exit 2
       prompt_file="$2"
+      shift 2
+      ;;
+    --task-json)
+      [[ "$#" -ge 2 ]] || exit 2
+      task_json="$2"
       shift 2
       ;;
     *)
@@ -45,6 +51,11 @@ if [[ -n "${prompt_file}" && -f "${prompt_file}" ]]; then
   fi
 fi
 
+if [[ "${role}" != "readiness" && -n "${FAKE_OPENCODE_LAUNCH_MARKER:-}" ]]; then
+  mkdir -p "$(dirname "${FAKE_OPENCODE_LAUNCH_MARKER}")"
+  printf 'launched\n' > "${FAKE_OPENCODE_LAUNCH_MARKER}"
+fi
+
 files_changed_json="[]"
 summary="fake opencode readiness ok"
 if [[ "${role}" == "implement" ]]; then
@@ -60,15 +71,55 @@ if [[ "${mode}" == "worker-nonzero-missing-report" && "${role}" != "readiness" ]
   exit 19
 fi
 
+if [[ "${mode}" == "worker-nonzero-invalid-report" && "${role}" != "readiness" ]]; then
+  if [[ -n "${report_path}" ]]; then
+    mkdir -p "$(dirname "${report_path}")"
+    printf 'this is not json\n' > "${report_path}"
+  fi
+  printf 'worker wrote invalid report\n' >&2
+  exit 19
+fi
+
+if [[ "${mode}" == "worker-workspace-violation" && "${role}" != "readiness" ]]; then
+  if [[ -n "${task_json}" && -f "${task_json}" ]]; then
+    python3 - "${task_json}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    task = json.load(handle)
+repo_path = Path(task["repo_path"])
+(repo_path / "main-checkout-violation.txt").write_text("main checkout edit\n", encoding="utf-8")
+PY
+  else
+    printf 'missing task json for workspace violation\n' >&2
+    exit 20
+  fi
+fi
+
 if [[ -n "${report_path}" ]]; then
   mkdir -p "$(dirname "${report_path}")"
-  python3 - "${report_path}" "${summary}" "${files_changed_json}" <<'PY'
+  report_status="completed"
+  report_error_code=""
+  if [[ "${mode}" == "worker-nonzero-partial-report" && "${role}" != "readiness" ]]; then
+    report_status="partial"
+    report_error_code="worker_partial"
+  elif [[ "${mode}" == "worker-nonzero-partial-report-no-error-code" && "${role}" != "readiness" ]]; then
+    report_status="partial"
+  elif [[ "${mode}" == "worker-nonzero-failed-report" && "${role}" != "readiness" ]]; then
+    report_status="failed"
+    report_error_code="worker_declared_failure"
+  elif [[ "${mode}" == "worker-nonzero-failed-report-no-error-code" && "${role}" != "readiness" ]]; then
+    report_status="failed"
+  fi
+  python3 - "${report_path}" "${summary}" "${files_changed_json}" "${report_status}" "${report_error_code}" <<'PY'
 import json
 import sys
 
-path, summary, files_changed_json = sys.argv[1:]
+path, summary, files_changed_json, report_status, report_error_code = sys.argv[1:]
 payload = {
-    "status": "completed",
+    "status": report_status,
     "summary": summary,
     "files_changed": json.loads(files_changed_json),
     "tests_run": [],
@@ -76,8 +127,19 @@ payload = {
     "risks": [],
     "notes": [],
 }
+if report_error_code:
+    payload["error_code"] = report_error_code
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, separators=(",", ":"))
     handle.write("\n")
 PY
+fi
+
+if [[ "${role}" != "readiness" ]]; then
+  case "${mode}" in
+    worker-nonzero-partial-report|worker-nonzero-partial-report-no-error-code|worker-nonzero-failed-report|worker-nonzero-failed-report-no-error-code|worker-nonzero-completed-report)
+      printf 'worker exited nonzero after report\n' >&2
+      exit 19
+      ;;
+  esac
 fi
