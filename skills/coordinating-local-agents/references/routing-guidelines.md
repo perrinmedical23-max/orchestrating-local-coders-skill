@@ -13,6 +13,9 @@ Real `claude` and `opencode` adapters are follow-up work only. Do not document o
 V2 is OpenCode MVP only. The implemented real-provider path is `opencode` through an explicit local command template and readiness check:
 
 ```bash
+mkdir -p <repo>/.agent-orch
+cp examples/opencode/.agent-orch/providers.json <repo>/.agent-orch/providers.json
+cp examples/opencode/.agent-orch/opencode-run.sh <repo>/.agent-orch/opencode-run.sh
 agent-orch provider check --provider opencode --repo <repo>
 agent-orch loop start --provider opencode --role explore --repo <repo> --task-file <task.md> --acceptance-file <acceptance.md>
 agent-orch loop start --provider opencode --role implement --repo <repo> --task-file <task.md> --acceptance-file <acceptance.md>

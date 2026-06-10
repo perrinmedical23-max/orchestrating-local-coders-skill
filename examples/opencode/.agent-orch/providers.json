@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "providers": {
+    "opencode": {
+      "provider_id": "opencode",
+      "provider_kind": "external_cli",
+      "supported_roles": ["explore", "implement"],
+      "command_template": [
+        "bash",
+        "{workspace_path}/.agent-orch/opencode-run.sh",
+        "--prompt-file",
+        "{prompt_file}",
+        "--task-json",
+        "{task_json}",
+        "--workspace-path",
+        "{workspace_path}",
+        "--report",
+        "{report_path}",
+        "--task-dir",
+        "{task_dir}"
+      ],
+      "capabilities": {
+        "worktree": true,
+        "writes_report": true,
+        "supports_readonly": true,
+        "supports_timeout": true
+      }
+    }
+  }
+}

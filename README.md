@@ -63,6 +63,9 @@ bash tests/agent-orch/skill-docs.sh
 Default tests use fake OpenCode fixtures and do not require a real OpenCode install. Optional real-provider smoke is manual and should start with readiness:
 
 ```bash
+mkdir -p <repo>/.agent-orch
+cp examples/opencode/.agent-orch/providers.json <repo>/.agent-orch/providers.json
+cp examples/opencode/.agent-orch/opencode-run.sh <repo>/.agent-orch/opencode-run.sh
 agent-orch provider check --provider opencode --repo <repo>
 agent-orch loop start --provider opencode --role implement --repo <repo> --task-file <task.md> --acceptance-file <acceptance.md>
 agent-orch loop review --loop-id <loop-id> --repo <repo> --reviewer correctness --review-file <correctness-review.json>

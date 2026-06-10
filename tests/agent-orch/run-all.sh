@@ -21,6 +21,7 @@ tests=(
   "loop-decide.sh"
   "loop-auto-fix.sh"
   "loop-failure.sh"
+  "opencode-template.sh"
 )
 
 for test_name in "${tests[@]}"; do

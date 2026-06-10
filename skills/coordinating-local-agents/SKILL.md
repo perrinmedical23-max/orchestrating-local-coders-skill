@@ -32,6 +32,11 @@ V1.1 supports wrapper core, worktree execution, task state, `run`/`status`/`coll
 Use the v2 loop when dispatching OpenCode MVP only work through an explicit provider config:
 
 ```bash
+# one-time per target repo
+mkdir -p <repo>/.agent-orch
+cp examples/opencode/.agent-orch/providers.json <repo>/.agent-orch/providers.json
+cp examples/opencode/.agent-orch/opencode-run.sh <repo>/.agent-orch/opencode-run.sh
+
 agent-orch provider check --provider opencode --repo <repo>
 agent-orch loop start --provider opencode --role explore|implement --repo <repo> --task-file <task.md> --acceptance-file <acceptance.md>
 agent-orch loop review --loop-id <loop-id> --repo <repo> --reviewer correctness --review-file <correctness-review.json>
