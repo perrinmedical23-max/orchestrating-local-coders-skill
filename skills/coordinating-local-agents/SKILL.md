@@ -27,6 +27,22 @@ V1.1 supports wrapper core, worktree execution, task state, `run`/`status`/`coll
 
 `agent-orch doctor` is diagnostics, not scheduling authority. status can summarize progress; collect output must preserve worker report details. Do not invent a substitute worker answer if the report is failed, missing, or malformed.
 
+## V2 Loop
+
+Use the v2 loop when dispatching OpenCode MVP only work through an explicit provider config:
+
+```bash
+agent-orch provider check --provider opencode --repo <repo>
+agent-orch loop start --provider opencode --role explore|implement --repo <repo> --task-file <task.md> --acceptance-file <acceptance.md>
+agent-orch loop review --loop-id <loop-id> --repo <repo> --reviewer correctness --review-file <correctness-review.json>
+agent-orch loop review --loop-id <loop-id> --repo <repo> --reviewer integration --review-file <integration-review.json>
+agent-orch loop decide --loop-id <loop-id> --repo <repo>
+```
+
+The manual gate default is to stop after review/decision output for Codex inspection. Bounded continuation is explicit: pass `--auto-fix --max-iterations` on `loop start`, then run `agent-orch loop continue --loop-id <loop-id> --repo <repo>` only when `loop decide` creates a current `next_task.json`. There is no automatic merge/integration.
+
+Claude Code and Antigravity follow-up only: do not imply production support or route tasks to those providers from this MVP.
+
 Read the references as needed:
 
 - [Task Contract](references/task-contract.md) for worker prompt and task-state requirements.

@@ -12,6 +12,7 @@ Runtime dependencies: `bash`, `git`, and `python3`.
 - Design spec written: `docs/specs/2026-06-10-coordinating-local-agents-design.md`
 - V1 wrapper core implemented
 - V1.1 diagnostics surface implemented for fixture providers
+- V2 orchestration loop implemented for OpenCode MVP only
 - Coordinating skill available under `skills/coordinating-local-agents/`
 
 ## Scope
@@ -27,9 +28,13 @@ Version 1 and v1.1 are centered on:
 - runtime binding diagnostics without session support
 - attempt diagnostics and synthetic failed reports
 - task-scoped doctor and support bundle output
+- OpenCode MVP only v2 loop commands for provider readiness, loop start,
+  reviewer ingestion, deterministic decisions, and bounded continuation
 
 V1.1 supports only `--mode worktree`; inplace execution is follow-up work.
 Real `claude` and `opencode` adapters are follow-up work once local CLI contracts are explicitly pinned.
+
+V2 supports OpenCode through explicit command templates. Claude Code and Antigravity follow-up only: they are not production adapters in this repo. The manual gate default is to stop after reviewer/decision output for Codex inspection. Auto-fix requires explicit `--auto-fix --max-iterations`; there is no automatic merge/integration.
 
 V1.1 borrows setup/status/result contract ideas from
 `openai/codex-plugin-cc`, but not its plugin packaging, app-server bridge,
@@ -42,6 +47,37 @@ Run the wrapper-core suite with:
 
 ```bash
 bash tests/agent-orch/run-all.sh
+```
+
+Default focused checks:
+
+```bash
+bash tests/agent-orch/provider-config.sh
+bash tests/agent-orch/loop-start.sh
+bash tests/agent-orch/loop-review.sh
+bash tests/agent-orch/loop-decide.sh
+bash tests/agent-orch/loop-auto-fix.sh
+bash tests/agent-orch/skill-docs.sh
+```
+
+Default tests use fake OpenCode fixtures and do not require a real OpenCode install. Optional real-provider smoke is manual and should start with readiness:
+
+```bash
+agent-orch provider check --provider opencode --repo <repo>
+agent-orch loop start --provider opencode --role implement --repo <repo> --task-file <task.md> --acceptance-file <acceptance.md>
+agent-orch loop review --loop-id <loop-id> --repo <repo> --reviewer correctness --review-file <correctness-review.json>
+agent-orch loop review --loop-id <loop-id> --repo <repo> --reviewer integration --review-file <integration-review.json>
+agent-orch loop decide --loop-id <loop-id> --repo <repo>
+```
+
+Bounded continuation is opt-in on loop creation and explicit after decisioning:
+
+```bash
+agent-orch loop start --provider opencode --role implement --repo <repo> --task-file <task.md> --acceptance-file <acceptance.md> --auto-fix --max-iterations <n>
+agent-orch loop review --loop-id <loop-id> --repo <repo> --reviewer correctness --review-file <correctness-review.json>
+agent-orch loop review --loop-id <loop-id> --repo <repo> --reviewer integration --review-file <integration-review.json>
+agent-orch loop decide --loop-id <loop-id> --repo <repo>
+agent-orch loop continue --loop-id <loop-id> --repo <repo>
 ```
 
 The suite uses deterministic fixture providers. Point the wrapper at a provider
