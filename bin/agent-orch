@@ -683,6 +683,34 @@ loop_decide_command() {
     --loop-dir "${loop_dir}"
 }
 
+loop_continue_command() {
+  local loop_id=""
+  local repo=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --loop-id)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--loop-id requires a value"
+        loop_id="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown loop continue argument: $1"
+        ;;
+    esac
+  done
+
+  local loop_dir
+  loop_resolve_dir loop_dir "${loop_id}" "${repo}"
+  python3 "${ROOT_DIR}/lib/agent-orch/external_cli.py" continue \
+    --loop-dir "${loop_dir}"
+}
+
 loop_command() {
   local subcommand="${1:-}"
   shift || true
@@ -690,6 +718,9 @@ loop_command() {
   case "${subcommand}" in
     start)
       python3 "${ROOT_DIR}/lib/agent-orch/external_cli.py" "$@"
+      ;;
+    continue)
+      loop_continue_command "$@"
       ;;
     status)
       loop_status_command "$@"
@@ -704,7 +735,7 @@ loop_command() {
       loop_decide_command "$@"
       ;;
     *)
-      die "unknown_arg" "expected loop subcommand: start, status, collect, review, or decide"
+      die "unknown_arg" "expected loop subcommand: start, continue, status, collect, review, or decide"
       ;;
   esac
 }

@@ -89,11 +89,11 @@ def update_loop_state(loop_path, state, extra=None):
     write_json(loop_path, payload)
 
 
-def create_worktree(repo_path, loop_id, iteration_dir):
+def create_worktree(repo_path, loop_id, iteration, iteration_dir):
     base_rev = subprocess.check_output(["git", "-C", str(repo_path), "rev-parse", "HEAD"], text=True).strip()
     worktree_parent = repo_path.parent / f"{repo_path.name}.worktrees"
-    worktree_path = worktree_parent / f"agent-orch-loop-{loop_id}-1"
-    branch_name = f"agent-orch/loop-{loop_id}-1"
+    worktree_path = worktree_parent / f"agent-orch-loop-{loop_id}-{iteration}"
+    branch_name = f"agent-orch/loop-{loop_id}-{iteration}"
 
     worktree_parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
@@ -137,35 +137,52 @@ def write_prompt(path, role, task_statement, acceptance_criteria, workspace_path
     )
 
 
-def write_task_json(path, args, loop_id, repo_path, worktree_path, report_path, task_file, acceptance_file, task_statement, acceptance_criteria):
+def write_task_json(
+    path,
+    loop_id,
+    iteration,
+    provider,
+    role,
+    repo_path,
+    worktree_path,
+    report_path,
+    task_file,
+    acceptance_file,
+    task_statement,
+    acceptance_criteria,
+    extra=None,
+):
+    payload = {
+        "schema_version": 1,
+        "loop_id": loop_id,
+        "iteration": iteration,
+        "provider": provider,
+        "role": role,
+        "repo_path": str(repo_path),
+        "workspace_path": str(worktree_path),
+        "report_path": str(report_path),
+        "task_statement": task_statement,
+        "acceptance_criteria": acceptance_criteria,
+        "task_source": {
+            "task_file": str(task_file) if task_file else None,
+            "acceptance_file": str(acceptance_file) if acceptance_file else None,
+        },
+        "constraints": {
+            "allow_merge": False,
+            "allow_cherry_pick": False,
+            "allow_push": False,
+            "main_checkout_edits": False,
+        },
+        "report_requirements": {
+            "path": str(report_path),
+            "format": "json",
+        },
+    }
+    if extra:
+        payload.update(extra)
     write_json(
         path,
-        {
-            "schema_version": 1,
-            "loop_id": loop_id,
-            "iteration": 1,
-            "provider": args.provider,
-            "role": args.role,
-            "repo_path": str(repo_path),
-            "workspace_path": str(worktree_path),
-            "report_path": str(report_path),
-            "task_statement": task_statement,
-            "acceptance_criteria": acceptance_criteria,
-            "task_source": {
-                "task_file": str(task_file),
-                "acceptance_file": str(acceptance_file),
-            },
-            "constraints": {
-                "allow_merge": False,
-                "allow_cherry_pick": False,
-                "allow_push": False,
-                "main_checkout_edits": False,
-            },
-            "report_requirements": {
-                "path": str(report_path),
-                "format": "json",
-            },
-        },
+        payload,
     )
 
 
@@ -275,6 +292,147 @@ def run_launch(provider, command, worktree_path, iteration_dir):
     ).returncode
 
 
+def load_loop(loop_dir):
+    loop_path = Path(loop_dir).expanduser().resolve(strict=False) / "loop.json"
+    if not loop_path.is_file():
+        fail("loop_not_found", f"loop not found: {loop_path.parent}")
+    try:
+        with loop_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except json.JSONDecodeError as exc:
+        fail("loop_state_invalid", f"loop state is invalid JSON: {loop_path}: {exc}")
+    if not isinstance(payload, dict):
+        fail("loop_state_invalid", "loop state must be a JSON object")
+    for field in ("loop_id", "repo_path", "provider", "state"):
+        if not isinstance(payload.get(field), str) or not payload[field]:
+            fail("loop_state_invalid", f"loop state field must be a non-empty string: {field}", {"path": str(loop_path)})
+    if payload.get("role") not in VALID_ROLES:
+        fail("loop_state_invalid", "loop state role must be explore or implement", {"path": str(loop_path)})
+    current_iteration = payload.get("current_iteration")
+    if isinstance(current_iteration, bool) or not isinstance(current_iteration, int) or current_iteration < 1:
+        fail("loop_state_invalid", "loop current_iteration must be a positive integer", {"path": str(loop_path)})
+    if not isinstance(payload.get("auto_fix"), bool):
+        fail("loop_state_invalid", "loop auto_fix must be a boolean", {"path": str(loop_path)})
+    max_iterations = payload.get("max_iterations")
+    if payload["auto_fix"] and (
+        isinstance(max_iterations, bool)
+        or not isinstance(max_iterations, int)
+        or max_iterations < 1
+    ):
+        fail("loop_state_invalid", "loop max_iterations must be a positive integer when auto_fix is enabled", {"path": str(loop_path)})
+    return loop_path, payload
+
+
+def run_iteration(
+    loop_path,
+    loop_payload,
+    iteration,
+    provider,
+    role,
+    task_statement,
+    acceptance_criteria,
+    task_file,
+    acceptance_file,
+    task_extra=None,
+    dispatch_state="dispatching",
+):
+    repo_path = Path(loop_payload["repo_path"])
+    loop_dir = loop_path.parent
+    loop_id = loop_payload["loop_id"]
+    iteration_dir = loop_dir / "iterations" / str(iteration)
+
+    config = provider_config.validate_provider(repo_path, provider)
+    if role not in set(config["supported_roles"]):
+        fail("provider_config_invalid", f"provider does not support role: {role}")
+    readiness = provider_config.run_readiness(config)
+
+    update_loop_state(
+        loop_path,
+        dispatch_state,
+        {
+            "current_iteration": iteration,
+            "provider": provider,
+            "role": role,
+            "readiness": readiness,
+        },
+    )
+
+    worktree_path, base_rev = create_worktree(repo_path, loop_id, iteration, iteration_dir)
+    report_path = iteration_dir / "report.json"
+    prompt_path = iteration_dir / "prompt.md"
+    task_json_path = iteration_dir / "task.json"
+    write_prompt(prompt_path, role, task_statement, acceptance_criteria, worktree_path, report_path)
+    write_task_json(
+        task_json_path,
+        loop_id,
+        iteration,
+        provider,
+        role,
+        repo_path,
+        worktree_path,
+        report_path,
+        task_file,
+        acceptance_file,
+        task_statement,
+        acceptance_criteria,
+        task_extra,
+    )
+
+    command = provider_config.render_command(
+        config["command_template"],
+        {
+            "prompt_file": str(prompt_path),
+            "task_dir": str(iteration_dir),
+            "task_json": str(task_json_path),
+            "workspace_path": str(worktree_path),
+            "report_path": str(report_path),
+        },
+    )
+    write_json(
+        iteration_dir / "provider-command.json",
+        {
+            "provider_id": config["provider_id"],
+            "provider_kind": config["provider_kind"],
+            "command": command,
+            "config_path": config["config_path"],
+        },
+    )
+
+    update_loop_state(
+        loop_path,
+        "worker_running",
+        {
+            "current_iteration": iteration,
+            "worktree_path": str(worktree_path),
+        },
+    )
+    run_launch(provider, command, worktree_path, iteration_dir)
+    repair_report_if_needed(iteration_dir)
+    write_diff_summary(worktree_path, base_rev, iteration_dir)
+
+    report_status = read_report_status(report_path)
+    changed_files = read_changed_files(report_path)
+    update_loop_state(
+        loop_path,
+        "worker_collected",
+        {
+            "current_iteration": iteration,
+            "provider": provider,
+            "role": role,
+            "worktree_path": str(worktree_path),
+            "worker_report_status": report_status,
+            "report_path": str(report_path),
+        },
+    )
+    return {
+        "iteration_dir": iteration_dir,
+        "worktree_path": worktree_path,
+        "report_path": report_path,
+        "report_status": report_status,
+        "changed_files": changed_files,
+    }
+
+
 def start_command(args):
     if args.role not in VALID_ROLES:
         fail("invalid_role", "role must be explore or implement")
@@ -311,10 +469,22 @@ def start_command(args):
     )
 
     try:
-        config = provider_config.validate_provider(repo_path, args.provider)
-        if args.role not in set(config["supported_roles"]):
-            fail("provider_config_invalid", f"provider does not support role: {args.role}")
-        readiness = provider_config.run_readiness(config)
+        result = run_iteration(
+            loop_path,
+            {
+                "loop_id": loop_id,
+                "repo_path": str(repo_path),
+            },
+            1,
+            args.provider,
+            args.role,
+            task_statement,
+            acceptance_criteria,
+            task_file,
+            acceptance_file,
+            None,
+            "dispatching",
+        )
     except provider_config.AgentOrchError as exc:
         update_loop_state(loop_path, "failed")
         details = dict(exc.details)
@@ -325,63 +495,6 @@ def start_command(args):
         details = dict(exc.details)
         details.update({"loop_id": loop_id, "loop_dir": str(loop_dir)})
         fail(exc.code, exc.message, details)
-
-    try:
-        update_loop_state(loop_path, "dispatching", {"readiness": readiness})
-        worktree_path, base_rev = create_worktree(repo_path, loop_id, iteration_dir)
-        report_path = iteration_dir / "report.json"
-        prompt_path = iteration_dir / "prompt.md"
-        task_json_path = iteration_dir / "task.json"
-        write_prompt(prompt_path, args.role, task_statement, acceptance_criteria, worktree_path, report_path)
-        write_task_json(
-            task_json_path,
-            args,
-            loop_id,
-            repo_path,
-            worktree_path,
-            report_path,
-            task_file,
-            acceptance_file,
-            task_statement,
-            acceptance_criteria,
-        )
-
-        command = provider_config.render_command(
-            config["command_template"],
-            {
-                "prompt_file": str(prompt_path),
-                "task_dir": str(iteration_dir),
-                "task_json": str(task_json_path),
-                "workspace_path": str(worktree_path),
-                "report_path": str(report_path),
-            },
-        )
-        write_json(
-            iteration_dir / "provider-command.json",
-            {
-                "provider_id": config["provider_id"],
-                "provider_kind": config["provider_kind"],
-                "command": command,
-                "config_path": config["config_path"],
-            },
-        )
-
-        update_loop_state(loop_path, "worker_running", {"worktree_path": str(worktree_path)})
-        run_launch(args.provider, command, worktree_path, iteration_dir)
-        repair_report_if_needed(iteration_dir)
-        write_diff_summary(worktree_path, base_rev, iteration_dir)
-
-        report_status = read_report_status(report_path)
-        changed_files = read_changed_files(report_path)
-        update_loop_state(
-            loop_path,
-            "worker_collected",
-            {
-                "worktree_path": str(worktree_path),
-                "worker_report_status": report_status,
-                "report_path": str(report_path),
-            },
-        )
     except Exception as exc:
         update_loop_state(loop_path, "failed")
         fail(
@@ -401,11 +514,166 @@ def start_command(args):
             "status": "worker_collected",
             "current_iteration": 1,
             "loop_dir": str(loop_dir),
-            "iteration_dir": str(iteration_dir),
-            "worktree_path": str(worktree_path),
-            "report_path": str(report_path),
-            "report_status": report_status,
-            "changed_files": changed_files,
+            "iteration_dir": str(result["iteration_dir"]),
+            "worktree_path": str(result["worktree_path"]),
+            "report_path": str(result["report_path"]),
+            "report_status": result["report_status"],
+            "changed_files": result["changed_files"],
+        }
+    )
+    return 0
+
+
+def continue_command(args):
+    loop_path, loop_payload = load_loop(args.loop_dir)
+    loop_dir = loop_path.parent
+    loop_id = loop_payload["loop_id"]
+    current_iteration = loop_payload["current_iteration"]
+
+    if not loop_payload.get("auto_fix"):
+        fail(
+            "auto_fix_not_enabled",
+            "loop continue requires a loop started with --auto-fix",
+            {"loop_id": loop_id, "loop_dir": str(loop_dir)},
+        )
+
+    max_iterations = loop_payload.get("max_iterations")
+    next_iteration = current_iteration + 1
+    if not isinstance(max_iterations, int) or next_iteration > max_iterations:
+        update_loop_state(loop_path, "failed_max_iterations")
+        fail(
+            "max_iterations_reached",
+            "loop continue would exceed --max-iterations",
+            {
+                "loop_id": loop_id,
+                "loop_dir": str(loop_dir),
+                "current_iteration": current_iteration,
+                "max_iterations": max_iterations,
+            },
+        )
+
+    source_iteration_dir = loop_dir / "iterations" / str(current_iteration)
+    next_task_path = source_iteration_dir / "next_task.json"
+    if not next_task_path.is_file():
+        fail(
+            "next_task_missing",
+            "loop continue requires an existing next_task.json",
+            {
+                "loop_id": loop_id,
+                "loop_dir": str(loop_dir),
+                "current_iteration": current_iteration,
+                "next_task_path": str(next_task_path),
+            },
+        )
+
+    decision_path = source_iteration_dir / "decision.json"
+    try:
+        with decision_path.open("r", encoding="utf-8") as handle:
+            decision_payload = json.load(handle)
+    except Exception:
+        decision_payload = {}
+    expected_next_task_path = decision_payload.get("next_task_path") if isinstance(decision_payload, dict) else None
+    if (
+        loop_payload.get("state") != "worker_collected"
+        or not isinstance(decision_payload, dict)
+        or decision_payload.get("decision") != "auto_fix_ready"
+        or expected_next_task_path != str(next_task_path)
+    ):
+        fail(
+            "next_task_stale",
+            "loop continue requires a current auto_fix_ready decision",
+            {
+                "loop_id": loop_id,
+                "loop_dir": str(loop_dir),
+                "current_iteration": current_iteration,
+                "next_task_path": str(next_task_path),
+                "decision_path": str(decision_path),
+            },
+        )
+
+    try:
+        with next_task_path.open("r", encoding="utf-8") as handle:
+            next_task = json.load(handle)
+    except json.JSONDecodeError as exc:
+        fail("next_task_invalid", f"next_task.json is invalid JSON: {exc}", {"next_task_path": str(next_task_path)})
+    if not isinstance(next_task, dict):
+        fail("next_task_invalid", "next_task.json must be a JSON object", {"next_task_path": str(next_task_path)})
+
+    provider = loop_payload["provider"]
+    role = next_task.get("role", loop_payload["role"])
+    if role not in VALID_ROLES:
+        fail("invalid_role", "next_task role must be explore or implement", {"next_task_path": str(next_task_path)})
+    task_statement = next_task.get("task_statement")
+    acceptance_criteria = next_task.get("acceptance_criteria") or next_task.get("original_acceptance_criteria")
+    if not isinstance(task_statement, str) or not task_statement.strip():
+        fail("next_task_invalid", "next_task.json must include task_statement", {"next_task_path": str(next_task_path)})
+    if not isinstance(acceptance_criteria, str) or not acceptance_criteria.strip():
+        fail("next_task_invalid", "next_task.json must include acceptance_criteria", {"next_task_path": str(next_task_path)})
+
+    consumed_path = source_iteration_dir / "next_task.consumed.json"
+    next_task["consumed_at"] = utc_now()
+    next_task["consumed_by_iteration"] = next_iteration
+    write_json(consumed_path, next_task)
+    next_task_path.unlink()
+
+    task_extra = {
+        "source_next_task_path": str(consumed_path),
+        "source_iteration": current_iteration,
+        "auto_fix": True,
+        "blocker_summaries": next_task.get("blocker_summaries", []),
+        "blocker_signature": next_task.get("blocker_signature"),
+        "original_acceptance_criteria": next_task.get("original_acceptance_criteria"),
+    }
+
+    try:
+        result = run_iteration(
+            loop_path,
+            loop_payload,
+            next_iteration,
+            provider,
+            role,
+            task_statement,
+            acceptance_criteria,
+            None,
+            None,
+            task_extra,
+            "auto_fix_dispatching",
+        )
+    except provider_config.AgentOrchError as exc:
+        update_loop_state(loop_path, "failed")
+        details = dict(exc.details)
+        details.update({"loop_id": loop_id, "loop_dir": str(loop_dir), "iteration": next_iteration})
+        fail(exc.code, exc.message, details)
+    except AgentOrchError as exc:
+        update_loop_state(loop_path, "failed")
+        details = dict(exc.details)
+        details.update({"loop_id": loop_id, "loop_dir": str(loop_dir), "iteration": next_iteration})
+        fail(exc.code, exc.message, details)
+    except Exception as exc:
+        update_loop_state(loop_path, "failed")
+        fail(
+            "loop_continue_failed",
+            str(exc),
+            {
+                "loop_id": loop_id,
+                "loop_dir": str(loop_dir),
+                "iteration_dir": str(loop_dir / "iterations" / str(next_iteration)),
+            },
+        )
+
+    print_json(
+        {
+            "loop_id": loop_id,
+            "state": "worker_collected",
+            "status": "worker_collected",
+            "current_iteration": next_iteration,
+            "loop_dir": str(loop_dir),
+            "iteration_dir": str(result["iteration_dir"]),
+            "worktree_path": str(result["worktree_path"]),
+            "report_path": str(result["report_path"]),
+            "report_status": result["report_status"],
+            "changed_files": result["changed_files"],
+            "consumed_next_task_path": str(consumed_path),
         }
     )
     return 0
@@ -420,7 +688,7 @@ class JsonArgumentParser(argparse.ArgumentParser):
         fail("invalid_args", message)
 
 
-def build_parser():
+def build_start_parser():
     parser = JsonArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--provider", required=True)
@@ -432,9 +700,21 @@ def build_parser():
     return parser
 
 
+def build_continue_parser():
+    parser = JsonArgumentParser()
+    parser.add_argument("--loop-dir", required=True)
+    return parser
+
+
 def main(argv):
-    parser = build_parser()
     try:
+        if argv and argv[0] == "continue":
+            parser = build_continue_parser()
+            args = parser.parse_args(argv[1:])
+            return continue_command(args)
+        if argv and argv[0] == "start":
+            argv = argv[1:]
+        parser = build_start_parser()
         args = parser.parse_args(argv)
         return start_command(args)
     except AgentOrchError as exc:

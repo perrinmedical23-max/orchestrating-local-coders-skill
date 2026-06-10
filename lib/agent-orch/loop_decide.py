@@ -151,6 +151,173 @@ def update_loop_state(loop_path, loop_payload, state):
     write_json(loop_path, updated)
 
 
+def finding_summary(reviewer, review_payload, finding):
+    if isinstance(finding, dict):
+        return {
+            "reviewer": reviewer,
+            "review_summary": review_payload.get("summary", ""),
+            "severity": finding.get("severity"),
+            "file": finding.get("file"),
+            "line": finding.get("line"),
+            "issue": finding.get("issue"),
+            "recommendation": finding.get("recommendation"),
+        }
+    return {
+        "reviewer": reviewer,
+        "review_summary": review_payload.get("summary", ""),
+        "severity": None,
+        "file": None,
+        "line": None,
+        "issue": str(finding),
+        "recommendation": None,
+    }
+
+
+def collect_blocker_summaries(reviews):
+    blockers = []
+    for reviewer in REQUIRED_REVIEWERS:
+        review_payload = reviews[reviewer]["payload"]
+        if review_payload["status"] != "blocked":
+            continue
+        findings = review_payload.get("blocking_findings", [])
+        if findings:
+            blockers.extend(finding_summary(reviewer, review_payload, finding) for finding in findings)
+        else:
+            blockers.append(
+                {
+                    "reviewer": reviewer,
+                    "review_summary": review_payload.get("summary", ""),
+                    "severity": None,
+                    "file": None,
+                    "line": None,
+                    "issue": review_payload.get("summary", "Reviewer blocked without a finding."),
+                    "recommendation": None,
+                }
+            )
+    return blockers
+
+
+def blocker_signature(blocker_summaries):
+    normalized = []
+    for blocker in blocker_summaries:
+        normalized.append(
+            {
+                "reviewer": blocker.get("reviewer"),
+                "file": blocker.get("file"),
+                "line": blocker.get("line"),
+                "issue": blocker.get("issue"),
+                "recommendation": blocker.get("recommendation"),
+            }
+        )
+    normalized.sort(
+        key=lambda item: (
+            str(item.get("reviewer")),
+            str(item.get("file")),
+            str(item.get("line")),
+            str(item.get("issue")),
+            str(item.get("recommendation")),
+        )
+    )
+    return json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+
+
+def prior_blocker_signatures(loop_dir, current_iteration):
+    signatures = set()
+    for iteration_number in range(1, current_iteration):
+        iteration_dir = loop_dir / "iterations" / str(iteration_number)
+        for name in ("next_task.json", "next_task.consumed.json"):
+            path = iteration_dir / name
+            if not path.is_file():
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            signature = payload.get("blocker_signature")
+            if isinstance(signature, str) and signature:
+                signatures.add(signature)
+        decision_path = iteration_dir / "decision.json"
+        if decision_path.is_file():
+            try:
+                payload = json.loads(decision_path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            signature = payload.get("blocker_signature")
+            if isinstance(signature, str) and signature:
+                signatures.add(signature)
+    return signatures
+
+
+def read_text_if_exists(path):
+    try:
+        return path.read_text(encoding="utf-8") if path.is_file() else ""
+    except OSError:
+        return ""
+
+
+def archive_stale_next_task(iteration_dir, decision):
+    next_task_path = iteration_dir / "next_task.json"
+    if not next_task_path.is_file():
+        return None
+    stale_path = iteration_dir / "next_task.stale.json"
+    try:
+        payload = json.loads(next_task_path.read_text(encoding="utf-8"))
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload["stale_at"] = utc_now()
+    payload["stale_decision"] = decision
+    write_json(stale_path, payload)
+    next_task_path.unlink()
+    return stale_path
+
+
+def build_next_task(loop_payload, loop_dir, iteration, iteration_dir, reviews, report_payload):
+    first_task = read_json(loop_dir / "iterations" / "1" / "task.json", "task_invalid", "initial task")
+    current_task = read_json(iteration_dir / "task.json", "task_invalid", "current task")
+    blocker_summaries = collect_blocker_summaries(reviews)
+    signature = blocker_signature(blocker_summaries)
+    acceptance_criteria = first_task.get("acceptance_criteria", current_task.get("acceptance_criteria", ""))
+    blocker_lines = []
+    for index, blocker in enumerate(blocker_summaries, start=1):
+        location_parts = [str(value) for value in (blocker.get("file"), blocker.get("line")) if value not in (None, "")]
+        location = ":".join(location_parts) if location_parts else "unspecified location"
+        issue = blocker.get("issue") or blocker.get("review_summary") or "Blocking reviewer finding"
+        recommendation = blocker.get("recommendation")
+        line = f"{index}. [{blocker.get('reviewer')}] {location}: {issue}"
+        if recommendation:
+            line = f"{line} Recommendation: {recommendation}"
+        blocker_lines.append(line)
+    task_statement = "\n".join(
+        [
+            "Fix only the blocking reviewer findings listed below. Keep the change narrower than the original task.",
+            "",
+            "Blocking findings:",
+            *blocker_lines,
+            "",
+            "Original acceptance criteria still apply.",
+        ]
+    )
+    return {
+        "schema_version": 1,
+        "loop_id": loop_payload["loop_id"],
+        "source_iteration": iteration,
+        "target_iteration": iteration + 1,
+        "provider": loop_payload["provider"],
+        "role": loop_payload["role"],
+        "task_statement": task_statement,
+        "acceptance_criteria": acceptance_criteria,
+        "original_task_statement": first_task.get("task_statement", ""),
+        "original_acceptance_criteria": acceptance_criteria,
+        "blocker_summaries": blocker_summaries,
+        "blocker_signature": signature,
+        "current_diff_summary": read_text_if_exists(iteration_dir / "diff_summary"),
+        "prior_report_summary": report_payload.get("summary"),
+        "generated_at": utc_now(),
+    }
+
+
 def decide_command(args):
     loop_path, loop_payload = load_loop(args.loop_dir)
     loop_dir = loop_path.parent
@@ -193,12 +360,49 @@ def decide_command(args):
         for reviewer in REQUIRED_REVIEWERS
         if reviewer_statuses[reviewer] in {"blocked", "needs_human"}
     ]
+    needs_human_reviewers = [
+        reviewer
+        for reviewer in REQUIRED_REVIEWERS
+        if reviewer_statuses[reviewer] == "needs_human"
+    ]
+    blocked_reviewers = [
+        reviewer
+        for reviewer in REQUIRED_REVIEWERS
+        if reviewer_statuses[reviewer] == "blocked"
+    ]
+    next_task_path = None
+    blocker_summaries = []
+    signature = None
     if all(status == "passed" for status in reviewer_statuses.values()):
         state = "completed"
         decision = "completed"
+    elif needs_human_reviewers:
+        state = "manual_gate"
+        decision = "manual_gate"
+    elif blocked_reviewers and loop_payload.get("auto_fix"):
+        max_iterations = loop_payload.get("max_iterations")
+        blocker_summaries = collect_blocker_summaries(reviews)
+        signature = blocker_signature(blocker_summaries)
+        if signature in prior_blocker_signatures(loop_dir, iteration):
+            state = "stopped"
+            decision = "repeated_blocker"
+        elif not isinstance(max_iterations, int) or iteration >= max_iterations:
+            state = "failed_max_iterations"
+            decision = "max_iterations_reached"
+        else:
+            state = "worker_collected"
+            decision = "auto_fix_ready"
+            next_task = build_next_task(loop_payload, loop_dir, iteration, iteration_dir, reviews, report_payload)
+            next_task_path = iteration_dir / "next_task.json"
+            write_json(next_task_path, next_task)
+            signature = next_task["blocker_signature"]
     else:
         state = "manual_gate"
         decision = "manual_gate"
+
+    stale_next_task_path = None
+    if decision != "auto_fix_ready":
+        stale_next_task_path = archive_stale_next_task(iteration_dir, decision)
 
     decided_at = utc_now()
     payload = {
@@ -207,17 +411,30 @@ def decide_command(args):
         "current_iteration": iteration,
         "decision": decision,
         "blocking_reviewers": blocking_reviewers,
-        "next_task_path": None,
+        "next_task_path": str(next_task_path) if next_task_path else None,
         "decided_at": decided_at,
         "report_path": str(report_path),
         "report_status": report_payload.get("status"),
         "review_paths": {reviewer: reviews[reviewer]["path"] for reviewer in REQUIRED_REVIEWERS},
         "reviewer_statuses": reviewer_statuses,
         "decision_path": str(decision_path),
+        "blocker_summaries": blocker_summaries,
+        "blocker_signature": signature,
+        "stale_next_task_path": str(stale_next_task_path) if stale_next_task_path else None,
     }
 
     write_json(decision_path, payload)
     update_loop_state(loop_path, loop_payload, state)
+    if decision == "repeated_blocker":
+        fail(
+            "repeated_blocker",
+            "auto-fix stopped because reviewer blockers repeated",
+            {
+                "loop_id": loop_payload["loop_id"],
+                "current_iteration": iteration,
+                "decision_path": str(decision_path),
+            },
+        )
     print_json(payload)
     return 0
 
