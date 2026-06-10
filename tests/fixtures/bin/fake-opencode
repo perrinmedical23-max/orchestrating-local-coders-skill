@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode="${FAKE_OPENCODE_MODE:-success}"
+case "${mode}" in
+  noninteractive-message)
+    printf 'running in non-interactive mode\n'
+    ;;
+  interactive)
+    printf 'requires an interactive TTY\n' >&2
+    exit 2
+    ;;
+  nonzero)
+    printf 'readiness failed\n' >&2
+    exit 17
+    ;;
+esac
+
+report_path=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --report|--report-path)
+      [[ "$#" -ge 2 ]] || exit 2
+      report_path="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+if [[ -n "${report_path}" ]]; then
+  mkdir -p "$(dirname "${report_path}")"
+  cat > "${report_path}" <<'JSON'
+{"status":"completed","summary":"fake opencode readiness ok","files_changed":[],"tests_run":[],"open_questions":[],"risks":[],"notes":[]}
+JSON
+fi

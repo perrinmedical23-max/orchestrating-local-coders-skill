@@ -43,6 +43,56 @@ if str(value) != expected:
 PY
 }
 
+assert_json_array_contains() {
+  local path="$1"
+  local key="$2"
+  local expected="$3"
+  python3 - "$path" "$key" "$expected" <<'PY'
+import json
+import sys
+
+path, key, expected = sys.argv[1:]
+with open(path, "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+
+value = data
+for part in key.split("."):
+    value = value[part]
+
+if not isinstance(value, list):
+    print(f"expected {key} to be an array, got {type(value).__name__}", file=sys.stderr)
+    sys.exit(1)
+if expected not in [str(item) for item in value]:
+    print(f"expected {key} to contain {expected}, got {value}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+assert_agent_orch_error() {
+  local expected="$1"
+  shift
+  local out_path="${TEST_TMPDIR}/agent-orch-error.out"
+  local err_path="${TEST_TMPDIR}/agent-orch-error.err"
+
+  if "$@" > "${out_path}" 2> "${err_path}"; then
+    printf 'expected command to fail with %s\n' "${expected}" >&2
+    exit 1
+  fi
+
+  python3 - "${err_path}" "${expected}" <<'PY'
+import json
+import sys
+
+path, expected = sys.argv[1:]
+lines = [line.strip() for line in open(path, encoding="utf-8") if line.strip()]
+if not lines:
+    raise SystemExit("expected JSON error on stderr")
+payload = json.loads(lines[-1])
+if payload.get("error") != expected:
+    raise SystemExit(f"expected {expected}, got {payload.get('error')}")
+PY
+}
+
 agent_orch_write_fixture_manifest() {
   local provider_dir="$1"
   local provider_id="$2"
