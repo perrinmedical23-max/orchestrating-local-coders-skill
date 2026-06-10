@@ -21,6 +21,16 @@ Use these CCB ideas as design inputs:
 
 Do not port CCB's daemon, tmux pane model, mailbox kernel, hot reload machinery, role packs, or real provider adapters into this plan.
 
+Use these `openai/codex-plugin-cc` ideas as additional design inputs:
+
+- `plugins/codex/scripts/lib/state.mjs`: state should have a version, a deterministic workspace scope, stable per-job/task files, and bounded index growth.
+- `plugins/codex/scripts/lib/tracked-jobs.mjs`: execution records should preserve phase, timestamps, pid/exit state when applicable, final output, and an append-only progress log.
+- `plugins/codex/scripts/lib/job-control.mjs`: status should be compact by default, include phase/progress preview/action hints, and reject ambiguous short ids.
+- `plugins/codex/commands/setup.md`: readiness checks should be explicit setup/doctor output, not implicit failures during task execution.
+- `plugins/codex/commands/result.md` and `plugins/codex/skills/codex-result-handling/SKILL.md`: result presentation must preserve the helper payload and must not invent substitute answers after a failed or malformed worker run.
+
+Do not port the Claude Code plugin packaging, app-server bridge, stop hook review gate, background process broker, Codex auth setup, or npm install flow into v1.1.
+
 ## File Map
 
 Existing files to modify:
@@ -40,6 +50,7 @@ Existing files to modify:
 - `skills/coordinating-local-agents/references/task-contract.md`: document provider manifest and runtime binding fields.
 - `skills/coordinating-local-agents/references/report-schema.md`: document attempts and diagnostic artifact locations.
 - `skills/coordinating-local-agents/references/routing-guidelines.md`: document named-agent routing boundaries.
+- `skills/coordinating-local-agents/references/result-handling.md`: add result/status presentation rules if a separate reference is clearer than expanding `report-schema.md`.
 - `README.md`: update status/scope and commands.
 
 New files to add:
@@ -63,6 +74,7 @@ New files to add:
 - `--mode worktree` remains the only execution mode.
 - `inplace`, daemon mode, tmux panes, interactive sessions, mailbox messaging, and autonomous multi-agent routing remain follow-up.
 - Named-agent config is mid-term follow-up only in this plan; it may later map names to fixture providers, but must not imply production adapters.
+- Background execution, cancel, resume, and review-gate behavior are mid-term follow-up only; v1.1 remains synchronous `run` plus task-scoped `status`/`collect`/`cleanup`.
 
 ## Phase A: Short-Term v1.1
 
@@ -223,7 +235,10 @@ Purpose: separate execution attempts from task identity so crash/missing-report 
   - `provider-result.json`
   - `report.json` or synthetic report copy
   - `report.raw` when available
+  - `progress.log` with wrapper lifecycle lines such as `starting`, `provider_running`, `finalizing`, and terminal status
 - [ ] Ensure `provider-result.json` remains wrapper-owned diagnostic artifact.
+- [ ] Add `phase` to `status.json`, using a small enum: `starting`, `running`, `finalizing`, `done`, `failed`.
+- [ ] Keep `phase` diagnostic-only; do not add background polling semantics in v1.1.
 - [ ] Ensure synthetic failed `report.json` references attempt diagnostics.
 - [ ] Do not add retry scheduling in v1.1; this is only a state layout and diagnostics improvement.
 
@@ -258,9 +273,17 @@ Purpose: give Codex a cheap way to inspect a task or export failure evidence.
   - task id, status, worker, provider id, provider kind
   - mode, repo path, worktree path
   - runtime binding fields
+  - phase and last four progress lines when available
   - report status and report path
   - provider-result summary
   - artifact existence booleans for stdout/stderr/report/report.raw/diffstat/attempts
+- [ ] Add a `readiness` object to doctor output:
+  - `provider_dir.exists`
+  - `provider_manifest.valid`
+  - `provider_command.executable`
+  - `repo.valid_git_repo`
+  - `worktree.exists`
+- [ ] Readiness must be best-effort diagnostics. It must not install CLIs, authenticate tools, mutate git config, or create providers.
 - [ ] Add `agent-orch doctor --task-id <id> --repo <repo> --bundle <path>`.
 - [ ] Bundle can be a directory or `.tar.gz`; choose the smallest implementation that is deterministic and easy to test.
 - [ ] Bundle must include diagnostic artifacts, not the full worktree.
@@ -297,8 +320,10 @@ Purpose: teach Codex how to use the new contracts without turning the skill into
   - skill marks real Claude/OpenCode adapters follow-up-only
   - skill describes `doctor` as diagnostics, not scheduling authority
   - skill keeps sessions follow-up-only
+  - skill requires Codex to preserve `collect`/`doctor` output evidence and not invent a substitute worker answer after failed, missing, or malformed output
+  - skill describes compact status/result presentation rules: status can summarize, collect/result payloads must preserve worker report details
 - [ ] Run the validation and confirm it fails before editing the skill.
-- [ ] Update `skills/coordinating-local-agents/SKILL.md` and references to describe provider manifests, runtime binding fields, attempts, and doctor/bundle.
+- [ ] Update `skills/coordinating-local-agents/SKILL.md` and references to describe provider manifests, runtime binding fields, attempts, progress preview, doctor/bundle, and result-handling boundaries.
 - [ ] Keep the skill concise and trigger-oriented; move detail into references.
 - [ ] Re-run validation and confirm it passes.
 
@@ -336,6 +361,7 @@ Purpose: make repo-level docs match the implemented short-term surface.
   - `agent-orch doctor --task-id <id> --repo <repo>`
   - `agent-orch doctor --task-id <id> --repo <repo> --bundle <path>`
 - [ ] Add a scope note that provider manifests describe fixture providers in v1.1 and do not bless production CLI adapters.
+- [ ] Add a note that v1.1 borrows setup/status/result contract ideas from `openai/codex-plugin-cc`, but not its plugin packaging, app-server bridge, auth setup, npm install flow, or background broker.
 - [ ] Add new test scripts to `tests/agent-orch/run-all.sh`.
 - [ ] Run the full test suite.
 
@@ -376,6 +402,9 @@ The items below are not part of this executable v1.1 plan. Convert each item int
 - Provider readiness checks: add `agent-orch provider check --provider <id> --repo <repo>` as a preflight diagnostics command. Fixture providers can pass; planned real providers must return `unsupported_provider` until pinned local CLI contracts exist.
 - Real adapter contract spec: document the minimum future contract for Claude/OpenCode adapters, including non-interactive invocation form, working directory behavior, exit code contract, stdout/stderr behavior, report-writing behavior, timeout/signal behavior, authentication assumptions, and permission assumptions.
 - Named-agent documentation: update README and skill references only after the config feature exists. Named agents are aliases over explicit worker selection, not autonomous routing.
+- Task index and retention: add a versioned task index with deterministic repo scope and bounded index size. Do not auto-delete worktrees or reports without explicit cleanup flags.
+- Background lifecycle: add background `run`, compact status listing, unambiguous short-id matching, `cancel`, and `resume` only after the synchronous v1.1 task model is stable.
+- Review gate: consider an explicit opt-in review gate only as a monitored follow-up. It must warn about long-running loops and usage cost, and it must not be enabled by default.
 
 ## Final Verification
 
