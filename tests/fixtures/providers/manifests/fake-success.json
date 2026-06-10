@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "provider_id": "fake-success",
+  "provider_kind": "fixture",
+  "command": "fake-success.sh",
+  "capabilities": {
+    "worktree": true,
+    "writes_report": true,
+    "streams_stdout": true,
+    "supports_timeout": true
+  },
+  "description": "Deterministic success fixture provider."
+}

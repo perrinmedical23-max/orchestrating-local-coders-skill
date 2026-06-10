@@ -4,7 +4,7 @@ Codex chooses workers explicitly in v1. There is no automatic routing policy.
 
 ## V1 Providers
 
-V1 supports deterministic fixture providers only. Use them to validate wrapper behavior around success, missing report, invalid report, timeout, and signal termination.
+V1.1 supports deterministic fixture providers only. Use them to validate wrapper behavior around success, missing report, invalid report, timeout, signal termination, provider manifest validation, runtime binding diagnostics, and doctor output.
 
 Real `claude` and `opencode` adapters are follow-up work only. Do not document or assume production adapter behavior in v1 tasks.
 
@@ -21,4 +21,4 @@ Do not delegate when the task requires ambiguous product judgment, sensitive cre
 
 ## Follow-Up Scope
 
-Future routing may consider worker strengths, repository language, task type, session reuse, and `inplace` execution. Those are not part of v1.
+Future routing may consider worker strengths, repository language, task type, session reuse, background execution, cancel/resume behavior, and `inplace` execution. Those are not part of v1.

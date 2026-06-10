@@ -71,6 +71,7 @@ cat > "${task_dir}/report.json" <<'JSON'
 JSON
 EOF
 chmod +x "${PROVIDER_DIR}/fake-boundary.sh"
+agent_orch_write_fixture_manifest "${PROVIDER_DIR}" "fake-boundary" "fake-boundary.sh"
 
 AGENT_ORCH_PROVIDER_DIR="${PROVIDER_DIR}" \
   "${ROOT_DIR}/bin/agent-orch" run \
@@ -116,10 +117,10 @@ if len(lines) != 1:
 payload = json.loads(lines[0])
 if payload.get("status") != "failed":
     raise SystemExit("expected failed status")
-if payload.get("error") != "missing_provider":
-    raise SystemExit(f"expected missing_provider, got {payload.get('error')}")
-if "does-not-exist.sh" not in payload.get("message", ""):
-    raise SystemExit("expected provider path in error message")
+if payload.get("error") != "provider_manifest_missing":
+    raise SystemExit(f"expected provider_manifest_missing, got {payload.get('error')}")
+if "does-not-exist.json" not in payload.get("message", ""):
+    raise SystemExit("expected manifest path in error message")
 PY
 
 assert_contains "${README}" "Runtime dependencies: \`bash\`, \`git\`, and \`python3\`."
@@ -127,7 +128,7 @@ assert_contains "${README}" "bash tests/agent-orch/run-all.sh"
 assert_contains "${README}" "AGENT_ORCH_PROVIDER_DIR"
 assert_contains "${README}" "worktree-only v1"
 assert_contains "${README}" "bash scripts/install-skill.sh"
-assert_contains "${README}" "deterministic fixture-provider v1 scope"
+assert_contains "${README}" "deterministic fixture-provider v1.1 scope"
 assert_contains "${README}" "Real \`claude\` and \`opencode\` adapters are follow-up work once local CLI contracts are explicitly pinned."
 
 printf 'provider-boundary.sh: ok\n'

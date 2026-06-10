@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "provider_id": "fake-missing-report",
+  "provider_kind": "fixture",
+  "command": "fake-missing-report.sh",
+  "capabilities": {
+    "worktree": true,
+    "writes_report": true,
+    "streams_stdout": true,
+    "supports_timeout": true
+  },
+  "description": "Fixture provider that exits without writing report.json."
+}

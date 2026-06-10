@@ -126,6 +126,7 @@ JSON
 exit 42
 EOF
 chmod +x "${INCONSISTENT_PROVIDER_DIR}/fake-completed-nonzero.sh"
+agent_orch_write_fixture_manifest "${INCONSISTENT_PROVIDER_DIR}" "fake-completed-nonzero" "fake-completed-nonzero.sh"
 
 INCONSISTENT_RUN_OUTPUT="${TEST_TMPDIR}/completed-nonzero-run.json"
 INCONSISTENT_COLLECT_OUTPUT="${TEST_TMPDIR}/completed-nonzero-collect.json"
@@ -172,6 +173,7 @@ JSON
 exit 42
 EOF
 chmod +x "${PARTIAL_PROVIDER_DIR}/fake-partial-nonzero.sh"
+agent_orch_write_fixture_manifest "${PARTIAL_PROVIDER_DIR}" "fake-partial-nonzero" "fake-partial-nonzero.sh"
 
 PARTIAL_RUN_OUTPUT="${TEST_TMPDIR}/partial-nonzero-run.json"
 PARTIAL_COLLECT_OUTPUT="${TEST_TMPDIR}/partial-nonzero-collect.json"
@@ -211,6 +213,7 @@ cat > "${BAD_PROVIDER_DIR}/fake-bad-shebang.sh" <<'EOF'
 #!/not/a/real/interpreter
 EOF
 chmod +x "${BAD_PROVIDER_DIR}/fake-bad-shebang.sh"
+agent_orch_write_fixture_manifest "${BAD_PROVIDER_DIR}" "fake-bad-shebang" "fake-bad-shebang.sh"
 
 BAD_RUN_OUTPUT="${TEST_TMPDIR}/bad-shebang-run.json"
 AGENT_ORCH_PROVIDER_DIR="${BAD_PROVIDER_DIR}" \

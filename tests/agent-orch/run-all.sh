@@ -11,6 +11,10 @@ tests=(
   "cleanup.sh"
   "skill-docs.sh"
   "provider-boundary.sh"
+  "provider-manifest.sh"
+  "runtime-binding.sh"
+  "attempts.sh"
+  "doctor.sh"
 )
 
 for test_name in "${tests[@]}"; do

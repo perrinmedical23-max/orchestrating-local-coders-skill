@@ -48,6 +48,7 @@ JSON
 exit 42
 EOF
 chmod +x "${FAIL_PROVIDER_DIR}/fake-controlled-fail.sh"
+agent_orch_write_fixture_manifest "${FAIL_PROVIDER_DIR}" "fake-controlled-fail" "fake-controlled-fail.sh"
 
 AGENT_ORCH_PROVIDER_DIR="${ROOT_DIR}/tests/fixtures/providers" \
   "${ROOT_DIR}/bin/agent-orch" run \

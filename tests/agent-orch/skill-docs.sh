@@ -9,6 +9,7 @@ SKILL_MD="${SKILL_DIR}/SKILL.md"
 TASK_CONTRACT="${SKILL_DIR}/references/task-contract.md"
 REPORT_SCHEMA="${SKILL_DIR}/references/report-schema.md"
 ROUTING_GUIDELINES="${SKILL_DIR}/references/routing-guidelines.md"
+RESULT_HANDLING="${SKILL_DIR}/references/result-handling.md"
 INSTALL_SCRIPT="${ROOT_DIR}/scripts/install-skill.sh"
 README="${ROOT_DIR}/README.md"
 RUN_ALL="${ROOT_DIR}/tests/agent-orch/run-all.sh"
@@ -17,6 +18,7 @@ assert_file_exists "${SKILL_MD}"
 assert_file_exists "${TASK_CONTRACT}"
 assert_file_exists "${REPORT_SCHEMA}"
 assert_file_exists "${ROUTING_GUIDELINES}"
+assert_file_exists "${RESULT_HANDLING}"
 assert_file_exists "${INSTALL_SCRIPT}"
 
 python3 - "${SKILL_MD}" <<'PY'
@@ -41,13 +43,17 @@ for line in frontmatter.splitlines():
 
 if fields.get("name") != "coordinating-local-agents":
     raise SystemExit("SKILL.md must define name: coordinating-local-agents")
+if set(fields) != {"name", "description"}:
+    raise SystemExit("SKILL.md frontmatter must contain only name and description")
 
 description = fields.get("description", "")
 if not description:
     raise SystemExit("SKILL.md must define description")
 
+if not description.startswith("Use when"):
+    raise SystemExit("SKILL.md description must start with Use when")
 description_lower = description.lower()
-if "use when" not in description_lower or "delegate" not in description_lower:
+if "delegate" not in description_lower:
     raise SystemExit("SKILL.md description must be trigger-oriented")
 
 if len(description.split()) > 40:
@@ -61,16 +67,23 @@ for command_name in run status collect cleanup; do
   assert_contains "${SKILL_MD}" "agent-orch ${command_name}"
 done
 
-for reference in task-contract.md report-schema.md routing-guidelines.md; do
+for reference in task-contract.md report-schema.md routing-guidelines.md result-handling.md; do
   assert_contains "${SKILL_MD}" "references/${reference}"
 done
 
 assert_contains "${SKILL_MD}" "Real \`claude\` and \`opencode\` adapters"
 assert_contains "${SKILL_MD}" "follow-up work only"
+assert_contains "${SKILL_MD}" "fixture-provider-only v1.1"
 assert_contains "${SKILL_MD}" "sessions"
 assert_contains "${SKILL_MD}" "\`--mode inplace\`"
 assert_contains "${SKILL_MD}" "\`unsupported_mode\`"
 assert_contains "${SKILL_MD}" "Codex-only"
+assert_contains "${SKILL_MD}" "agent-orch doctor"
+assert_contains "${SKILL_MD}" "diagnostics"
+assert_contains "${SKILL_MD}" "not scheduling authority"
+assert_contains "${SKILL_MD}" "Do not invent a substitute worker answer"
+assert_contains "${SKILL_MD}" "status can summarize"
+assert_contains "${SKILL_MD}" "collect output must preserve"
 
 assert_contains "${SKILL_MD}" "wrapper core"
 assert_contains "${SKILL_MD}" "worktree execution"
@@ -85,6 +98,10 @@ assert_contains "${SKILL_MD}" "\`--repo\` or \`--task-dir\` only to locate the t
 
 assert_contains "${TASK_CONTRACT}" "\`task_id\`"
 assert_contains "${TASK_CONTRACT}" "\`workspace_path\`"
+assert_contains "${TASK_CONTRACT}" "\`provider_id\`"
+assert_contains "${TASK_CONTRACT}" "\`provider_kind\`"
+assert_contains "${TASK_CONTRACT}" "\`runtime_ref\`"
+assert_contains "${TASK_CONTRACT}" "\`binding_status\`"
 assert_contains "${TASK_CONTRACT}" "Work only in \`workspace_path\`"
 assert_contains "${TASK_CONTRACT}" "Do not merge, cherry-pick"
 assert_contains "${TASK_CONTRACT}" "Codex reviews collected artifacts"
@@ -99,6 +116,16 @@ assert_contains "${REPORT_SCHEMA}" "killed by signal"
 assert_contains "${REPORT_SCHEMA}" "omits \`report.json\`"
 assert_contains "${REPORT_SCHEMA}" "invalid JSON"
 assert_contains "${REPORT_SCHEMA}" "wrapper artifact"
+assert_contains "${REPORT_SCHEMA}" "\`attempts/1/\`"
+assert_contains "${REPORT_SCHEMA}" "\`progress.log\`"
+assert_contains "${REPORT_SCHEMA}" "\`provider-result.json\` remains wrapper-owned"
+assert_contains "${REPORT_SCHEMA}" "\`report.raw\` when available"
+
+assert_contains "${RESULT_HANDLING}" "Status output can be summarized"
+assert_contains "${RESULT_HANDLING}" "Collect output must preserve"
+assert_contains "${RESULT_HANDLING}" "Doctor output is diagnostics"
+assert_contains "${RESULT_HANDLING}" "Do not invent a substitute worker answer"
+assert_contains "${RESULT_HANDLING}" "failed, missing, or malformed"
 
 assert_contains "${ROUTING_GUIDELINES}" "Codex chooses workers explicitly in v1"
 assert_contains "${ROUTING_GUIDELINES}" "deterministic fixture providers only"

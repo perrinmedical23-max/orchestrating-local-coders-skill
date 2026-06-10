@@ -13,7 +13,29 @@ agent_orch_resolve_provider_path() {
   local __out_var="$1"
   local worker="$2"
   local provider_dir="${AGENT_ORCH_PROVIDER_DIR:-${ROOT_DIR}/tests/fixtures/providers}"
-  local resolved_provider_path
+  local provider_manifest_json
+
+  agent_orch_resolve_provider_manifest_json provider_manifest_json "${worker}" "${provider_dir}"
+  printf -v "${__out_var}" '%s' "$(python3 - "${provider_manifest_json}" <<'PY'
+import json
+import sys
+
+print(json.loads(sys.argv[1])["provider_command"])
+PY
+)"
+}
+
+agent_orch_resolve_provider_manifest_json() {
+  local __out_var="$1"
+  local worker="$2"
+  local provider_dir="${AGENT_ORCH_PROVIDER_DIR:-${ROOT_DIR}/tests/fixtures/providers}"
+  local manifest_json
+  local manifest_err
+  local err_path
+
+  if [[ "$#" -ge 3 ]]; then
+    provider_dir="$3"
+  fi
 
   case "${worker}" in
     */*|"")
@@ -22,13 +44,15 @@ agent_orch_resolve_provider_path() {
   esac
 
   provider_dir="$(agent_orch_abs_path "${provider_dir}")"
-  resolved_provider_path="${provider_dir}/${worker}.sh"
-
-  if [[ ! -x "${resolved_provider_path}" ]]; then
-    die "missing_provider" "fixture provider is not executable: ${resolved_provider_path}"
+  err_path="$(mktemp)"
+  if ! manifest_json="$(python3 "${ROOT_DIR}/lib/agent-orch/provider_manifest.py" resolve --provider "${worker}" --provider-dir "${provider_dir}" 2> "${err_path}")"; then
+    manifest_err="$(cat "${err_path}")"
+    rm -f "${err_path}"
+    die "$(printf '%s' "${manifest_err}" | cut -f 1)" "$(printf '%s' "${manifest_err}" | cut -f 2-)"
   fi
+  rm -f "${err_path}"
 
-  printf -v "${__out_var}" '%s' "${resolved_provider_path}"
+  printf -v "${__out_var}" '%s' "${manifest_json}"
 }
 
 agent_orch_provider_path() {

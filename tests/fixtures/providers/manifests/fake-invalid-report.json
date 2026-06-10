@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "provider_id": "fake-invalid-report",
+  "provider_kind": "fixture",
+  "command": "fake-invalid-report.sh",
+  "capabilities": {
+    "worktree": true,
+    "writes_report": true,
+    "streams_stdout": true,
+    "supports_timeout": true
+  },
+  "description": "Fixture provider that writes invalid report JSON."
+}

@@ -10,21 +10,31 @@ Runtime dependencies: `bash`, `git`, and `python3`.
 ## Current Status
 
 - Design spec written: `docs/specs/2026-06-10-coordinating-local-agents-design.md`
-- Wrapper core under active implementation
+- V1 wrapper core implemented
+- V1.1 diagnostics surface implemented for fixture providers
 - Coordinating skill available under `skills/coordinating-local-agents/`
 
 ## Scope
 
-Version 1 is centered on:
+Version 1 and v1.1 are centered on:
 
 - a Codex-facing skill for delegation discipline
 - a thin shell wrapper for local worker orchestration
 - worktree-only v1 isolation
 - structured worker result collection
-- deterministic fixture-provider v1 scope
+- deterministic fixture-provider v1.1 scope
+- provider manifests for fixture providers
+- runtime binding diagnostics without session support
+- attempt diagnostics and synthetic failed reports
+- task-scoped doctor and support bundle output
 
-V1 supports only `--mode worktree`; inplace execution is follow-up work.
+V1.1 supports only `--mode worktree`; inplace execution is follow-up work.
 Real `claude` and `opencode` adapters are follow-up work once local CLI contracts are explicitly pinned.
+
+V1.1 borrows setup/status/result contract ideas from
+`openai/codex-plugin-cc`, but not its plugin packaging, app-server bridge,
+auth setup, npm install flow, background broker, cancel/resume lifecycle, or
+review gate.
 
 ## Local Tests
 
@@ -43,6 +53,18 @@ ${AGENT_ORCH_PROVIDER_DIR}/fake-success.sh
 
 Providers receive the task-state directory and normalized `task.json`, then run
 inside the assigned worktree workspace.
+
+Inspect a task with:
+
+```bash
+agent-orch doctor --task-id <task-id> --repo <repo>
+```
+
+Export diagnostics without copying the worktree with:
+
+```bash
+agent-orch doctor --task-id <task-id> --repo <repo> --bundle <path>
+```
 
 ## Skill Installation
 
@@ -65,6 +87,7 @@ You may need to restart Codex after installing so skill discovery refreshes.
 ```text
 bin/          agent-orch CLI wrapper
 docs/specs/   Design documents
+docs/superpowers/plans/ Implementation plans
 lib/          wrapper libraries
 scripts/      local install helpers
 skills/       Codex skill source

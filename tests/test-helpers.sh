@@ -42,3 +42,34 @@ if str(value) != expected:
     sys.exit(1)
 PY
 }
+
+agent_orch_write_fixture_manifest() {
+  local provider_dir="$1"
+  local provider_id="$2"
+  local command_name="$3"
+
+  mkdir -p "${provider_dir}/manifests"
+  python3 - "${provider_dir}/manifests/${provider_id}.json" "${provider_id}" "${command_name}" <<'PY'
+import json
+import sys
+
+path, provider_id, command_name = sys.argv[1:]
+payload = {
+    "schema_version": 1,
+    "provider_id": provider_id,
+    "provider_kind": "fixture",
+    "command": command_name,
+    "capabilities": {
+        "worktree": True,
+        "writes_report": True,
+        "streams_stdout": True,
+        "supports_timeout": True,
+    },
+    "description": f"Temporary fixture provider {provider_id}.",
+}
+
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, indent=2)
+    handle.write("\n")
+PY
+}

@@ -183,24 +183,93 @@ agent_orch_write_status_json() {
   local repo_path="$6"
   local worktree_path="$7"
   local report_path="$8"
+  local provider_manifest_json="{}"
+  local phase=""
+  if [[ "$#" -ge 9 ]]; then
+    provider_manifest_json="$9"
+  fi
+  if [[ "$#" -ge 10 ]]; then
+    phase="${10}"
+  fi
+  local provider_manifest_b64
+  provider_manifest_b64="$(printf '%s' "${provider_manifest_json}" | base64 -w 0)"
 
-  python3 - "$path" "$task_id" "$status" "$worker" "$mode" "$repo_path" "$worktree_path" "$report_path" <<'PY'
+  python3 - "$path" "$task_id" "$status" "$worker" "$mode" "$repo_path" "$worktree_path" "$report_path" "$provider_manifest_b64" "$phase" <<'PY'
+import base64
 import json
 import sys
+from pathlib import Path
 
-path, task_id, status, worker, mode, repo_path, worktree_path, report_path = sys.argv[1:]
+path, task_id, status, worker, mode, repo_path, worktree_path, report_path, provider_manifest_b64, phase = sys.argv[1:]
+provider_manifest_json = base64.b64decode(provider_manifest_b64.encode("ascii")).decode("utf-8")
+provider = json.loads(provider_manifest_json)
+path_obj = Path(path)
+if not provider and path_obj.exists():
+    try:
+        with path_obj.open("r", encoding="utf-8") as handle:
+            existing = json.load(handle)
+        provider = {
+            key: existing[key]
+            for key in ("provider_id", "provider_kind", "provider_command", "manifest_path", "capabilities")
+            if key in existing
+        }
+    except Exception:
+        provider = {}
+if not phase:
+    if status == "running":
+        phase = "running"
+    elif status in ("completed", "partial"):
+        phase = "done"
+    else:
+        phase = "failed"
 payload = {
     "task_id": task_id,
     "status": status,
+    "phase": phase,
     "worker": worker,
     "mode": mode,
     "repo_path": repo_path,
     "worktree_path": worktree_path,
+    "runtime_ref": f"task:{task_id}",
+    "session_ref": None,
+    "workspace_path": worktree_path,
+    "binding_status": "partial",
     "report_path": report_path,
 }
+for key in ("provider_id", "provider_kind", "provider_command", "manifest_path", "capabilities"):
+    if key in provider:
+        payload[key] = provider[key]
 
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, indent=2)
+    handle.write("\n")
+PY
+}
+
+agent_orch_write_provider_metadata() {
+  local metadata_path="$1"
+  local provider_manifest_json="$2"
+  local provider_manifest_b64
+  provider_manifest_b64="$(printf '%s' "${provider_manifest_json}" | base64 -w 0)"
+
+  python3 - "$metadata_path" "$provider_manifest_b64" <<'PY'
+import base64
+import json
+import sys
+
+metadata_path, provider_manifest_b64 = sys.argv[1:]
+provider_manifest_json = base64.b64decode(provider_manifest_b64.encode("ascii")).decode("utf-8")
+with open(metadata_path, "r", encoding="utf-8") as handle:
+    metadata = json.load(handle)
+provider = json.loads(provider_manifest_json)
+metadata.update({
+    key: provider[key]
+    for key in ("provider_id", "provider_kind", "provider_command", "manifest_path", "capabilities")
+    if key in provider
+})
+
+with open(metadata_path, "w", encoding="utf-8") as handle:
+    json.dump(metadata, handle, indent=2)
     handle.write("\n")
 PY
 }
@@ -257,10 +326,15 @@ with (task_dir / "metadata.json").open("r", encoding="utf-8") as handle:
 payload = {
     "task_id": status["task_id"],
     "status": status["status"],
+    "phase": status.get("phase"),
     "mode": status["mode"],
     "worker": status.get("worker"),
     "repo_path": metadata["repo_path"],
     "worktree_path": metadata["worktree_path"],
+    "runtime_ref": status.get("runtime_ref", f"task:{status['task_id']}"),
+    "session_ref": status.get("session_ref"),
+    "workspace_path": status.get("workspace_path", metadata["worktree_path"]),
+    "binding_status": status.get("binding_status", "partial"),
     "report_path": str(task_dir / "report.json"),
     "log_paths": {
         "stdout": str(task_dir / "stdout.log"),

@@ -69,6 +69,35 @@ repair_report_if_needed() {
   fi
 }
 
+agent_orch_progress_log() {
+  local progress_path="$1"
+  local phase="$2"
+  python3 - "${progress_path}" "${phase}" <<'PY'
+from datetime import datetime, timezone
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+phase = sys.argv[2]
+path.parent.mkdir(parents=True, exist_ok=True)
+stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+with path.open("a", encoding="utf-8") as handle:
+    handle.write(f"[{stamp}] {phase}\n")
+PY
+}
+
+agent_orch_sync_attempt_artifacts() {
+  local task_dir="$1"
+  local attempt_dir="$2"
+
+  mkdir -p "${attempt_dir}"
+  for artifact in stdout.log stderr.log provider-result.json report.json report.raw; do
+    if [[ -e "${task_dir}/${artifact}" ]]; then
+      cp "${task_dir}/${artifact}" "${attempt_dir}/${artifact}"
+    fi
+  done
+}
+
 run_command() {
   local worker=""
   local repo=""
@@ -141,6 +170,9 @@ run_command() {
     die "missing_file" "acceptance file does not exist: ${acceptance_file}"
   fi
 
+  local provider_manifest_json
+  agent_orch_resolve_provider_manifest_json provider_manifest_json "${worker}"
+
   local repo_path
   repo_path="$(agent_orch_resolve_repo "${repo}")"
 
@@ -151,8 +183,13 @@ run_command() {
   task_dir="$(agent_orch_create_task_dir "${repo_path}" "${task_id}" "${output_dir}")"
 
   local metadata_path="${task_dir}/metadata.json"
+  local attempt_dir="${task_dir}/attempts/1"
+  local progress_path="${attempt_dir}/progress.log"
+  mkdir -p "${attempt_dir}"
+  agent_orch_progress_log "${progress_path}" "starting"
   local worktree_path
   worktree_path="$(agent_orch_create_worktree "${repo_path}" "${task_id}" "${metadata_path}")"
+  agent_orch_write_provider_metadata "${metadata_path}" "${provider_manifest_json}"
 
   local base_rev
   base_rev="$(agent_orch_json_value "${metadata_path}" "base_rev")"
@@ -185,14 +222,16 @@ run_command() {
     "${acceptance_file_path}" \
     "${acceptance_criteria}"
 
-  agent_orch_write_status_json "${task_dir}/status.json" "${task_id}" "running" "${worker}" "${mode}" "${repo_path}" "${worktree_path}" "${task_dir}/report.json"
+  agent_orch_write_status_json "${task_dir}/status.json" "${task_id}" "running" "${worker}" "${mode}" "${repo_path}" "${worktree_path}" "${task_dir}/report.json" "${provider_manifest_json}" "running"
 
   local exit_code
+  agent_orch_progress_log "${progress_path}" "provider_running"
   set +e
   agent_orch_dispatch_provider "${worker}" "${task_dir}" "${task_json}" "${worktree_path}"
   exit_code="$?"
   set -e
 
+  agent_orch_progress_log "${progress_path}" "finalizing"
   repair_report_if_needed "${task_dir}"
 
   local report_status="failed"
@@ -203,7 +242,13 @@ run_command() {
     report_status="failed"
   fi
 
-  agent_orch_write_status_json "${task_dir}/status.json" "${task_id}" "${report_status}" "${worker}" "${mode}" "${repo_path}" "${worktree_path}" "${task_dir}/report.json"
+  local final_phase="failed"
+  if [[ "${report_status}" == "completed" || "${report_status}" == "partial" ]]; then
+    final_phase="done"
+  fi
+  agent_orch_progress_log "${progress_path}" "${final_phase}"
+  agent_orch_write_status_json "${task_dir}/status.json" "${task_id}" "${report_status}" "${worker}" "${mode}" "${repo_path}" "${worktree_path}" "${task_dir}/report.json" "${provider_manifest_json}" "${final_phase}"
+  agent_orch_sync_attempt_artifacts "${task_dir}" "${attempt_dir}"
   git -C "${worktree_path}" diff --stat "${base_rev}" -- > "${task_dir}/git.diffstat"
   cp "${task_dir}/git.diffstat" "${task_dir}/diff_summary"
 
@@ -406,6 +451,50 @@ print(json.dumps({
 PY
 }
 
+doctor_command() {
+  local task_id=""
+  local repo=""
+  local task_dir=""
+  local bundle=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --task-id)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-id requires a value"
+        task_id="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      --task-dir)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--task-dir requires a value"
+        task_dir="$2"
+        shift 2
+        ;;
+      --bundle)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--bundle requires a value"
+        bundle="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown doctor argument: $1"
+        ;;
+    esac
+  done
+
+  local resolved_task_dir
+  resolved_task_dir="$(agent_orch_resolve_task_dir "${task_id}" "${repo}" "${task_dir}")"
+
+  if [[ -n "${bundle}" ]]; then
+    python3 "${ROOT_DIR}/lib/agent-orch/doctor.py" --task-dir "${resolved_task_dir}" --bundle "${bundle}"
+  else
+    python3 "${ROOT_DIR}/lib/agent-orch/doctor.py" --task-dir "${resolved_task_dir}"
+  fi
+}
+
 command_name="${1:-}"
 shift || true
 
@@ -422,7 +511,10 @@ case "${command_name}" in
   cleanup)
     cleanup_command "$@"
     ;;
+  doctor)
+    doctor_command "$@"
+    ;;
   *)
-    die "unknown_command" "expected one of: run, status, collect, cleanup"
+    die "unknown_command" "expected one of: run, status, collect, cleanup, doctor"
     ;;
 esac

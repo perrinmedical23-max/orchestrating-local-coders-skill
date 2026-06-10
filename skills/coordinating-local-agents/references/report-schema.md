@@ -35,3 +35,15 @@ The list fields must be JSON arrays. Entries may be strings or objects, but shou
 - available failure metadata such as exit code, signal, timeout state, and raw report path
 
 A synthetic failed report is a wrapper artifact. Codex should treat it as a collection aid, not as worker-authored analysis.
+
+## Diagnostic Artifacts
+
+The wrapper keeps top-level v1-compatible artifacts in the task directory and mirrors execution evidence under `attempts/1/`.
+
+- `provider-result.json` remains wrapper-owned diagnostic artifact.
+- `stdout.log` and `stderr.log` capture provider process output.
+- `progress.log` records wrapper lifecycle phases such as starting, provider running, finalizing, and done or failed.
+- `report.raw` when available preserves the first invalid raw report payload.
+- `attempts/1/` mirrors stdout, stderr, provider result, final report, raw report when available, and progress log.
+
+Codex may use these diagnostics to review failures, but should not treat them as worker-authored conclusions.

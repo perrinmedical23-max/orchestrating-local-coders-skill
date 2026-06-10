@@ -9,23 +9,27 @@ Use this skill when a task is bounded, independently checkable, and worth isolat
 
 Before dispatch, define the task statement, acceptance criteria, target repo, worker, and validation plan. Keep the worker scoped to its assigned worktree and make integration a Codex-only decision.
 
-## V1 Wrapper
+## V1.1 Wrapper
 
-Use `agent-orch` for the v1 flow:
+Use `agent-orch` for the fixture-provider-only v1.1 flow:
 
 ```bash
 agent-orch run --worker <fixture-provider> --repo <repo> --mode worktree --task-file <task.md> --acceptance-file <acceptance.md>
 agent-orch status --task-id <task-id> --repo <repo>
 agent-orch collect --task-id <task-id> --repo <repo>
+agent-orch doctor --task-id <task-id> --repo <repo>
 agent-orch cleanup --task-id <task-id> --repo <repo> --remove-worktree
 ```
 
-V1 supports wrapper core, worktree execution, task state, `run`/`status`/`collect`/`cleanup`, report validation, synthetic failed reports, deterministic fixture providers, and this skill install path. Real `claude` and `opencode` adapters, sessions, and `--mode inplace` are follow-up work only.
+V1.1 supports wrapper core, worktree execution, task state, `run`/`status`/`collect`/`cleanup`/`doctor`, provider manifests, runtime binding diagnostics, attempt artifacts, progress preview, report validation, synthetic failed reports, deterministic fixture providers, and this skill install path. Real `claude` and `opencode` adapters, sessions, and `--mode inplace` are follow-up work only.
 
 `status`, `collect`, and `cleanup` are task-only in v1: pass `--task-id`; use `--repo` or `--task-dir` only to locate the task store. `--mode inplace` must fail with `unsupported_mode`.
+
+`agent-orch doctor` is diagnostics, not scheduling authority. status can summarize progress; collect output must preserve worker report details. Do not invent a substitute worker answer if the report is failed, missing, or malformed.
 
 Read the references as needed:
 
 - [Task Contract](references/task-contract.md) for worker prompt and task-state requirements.
 - [Report Schema](references/report-schema.md) for `report.json` fields and failure semantics.
 - [Routing Guidelines](references/routing-guidelines.md) for worker selection boundaries.
+- [Result Handling](references/result-handling.md) for status, collect, and doctor presentation rules.

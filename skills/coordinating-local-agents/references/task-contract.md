@@ -8,9 +8,14 @@ Workers receive a normalized task directory from `agent-orch`, not loose CLI arg
 
 - `task_id`: stable id for this delegated task.
 - `worker`: explicit provider name selected by Codex.
+- `provider_id`: manifest-backed provider identity.
+- `provider_kind`: `fixture` in v1.1.
 - `mode`: `worktree` in v1.
 - `repo_path`: original repository path used to locate task state.
 - `workspace_path`: worker writable worktree path.
+- `runtime_ref`: task-bound runtime identity such as `task:<task-id>`.
+- `session_ref`: `null` in v1.1; sessions are follow-up-only.
+- `binding_status`: `partial` for fixture worktree runs because there is a task runtime and workspace but no session.
 - `task_statement`: embedded task text or prompt.
 - `acceptance_criteria`: embedded validation criteria.
 - `task_source`: source paths or prompt text used to build the task.
