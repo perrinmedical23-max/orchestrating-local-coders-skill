@@ -1,0 +1,15 @@
+{
+  "status": "blocked",
+  "summary": "A blocking correctness issue remains.",
+  "blocking_findings": [
+    {
+      "severity": "high",
+      "file": "src/example.py",
+      "line": 12,
+      "issue": "The result is not persisted.",
+      "recommendation": "Persist the result before returning success."
+    }
+  ],
+  "tests_required": ["Add a regression test for persistence."],
+  "residual_risks": []
+}

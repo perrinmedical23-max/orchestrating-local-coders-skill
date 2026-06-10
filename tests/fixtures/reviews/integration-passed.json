@@ -1,0 +1,8 @@
+{
+  "status": "passed",
+  "summary": "Implementation matches the acceptance criteria.",
+  "acceptance_match": "met",
+  "blocking_findings": [],
+  "integration_risks": [],
+  "suggested_next_task": null
+}

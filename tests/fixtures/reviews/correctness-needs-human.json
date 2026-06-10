@@ -1,0 +1,7 @@
+{
+  "status": "needs_human",
+  "summary": "The reviewer could not determine correctness from available evidence.",
+  "blocking_findings": [],
+  "tests_required": [],
+  "residual_risks": ["Manual inspection is required for the ambiguous behavior."]
+}

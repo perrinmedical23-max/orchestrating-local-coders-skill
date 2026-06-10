@@ -1,0 +1,16 @@
+{
+  "status": "blocked",
+  "summary": "The implementation does not fully satisfy acceptance criteria.",
+  "acceptance_match": "partial",
+  "blocking_findings": [
+    {
+      "severity": "high",
+      "file": "src/example.py",
+      "line": 20,
+      "issue": "The CLI output omits a required field.",
+      "recommendation": "Include the required field in the JSON response."
+    }
+  ],
+  "integration_risks": ["Downstream automation cannot consume the output."],
+  "suggested_next_task": "Add the missing response field and update the focused test."
+}

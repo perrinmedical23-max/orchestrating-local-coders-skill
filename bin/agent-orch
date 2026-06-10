@@ -610,6 +610,51 @@ loop_collect_command() {
   python3 "${ROOT_DIR}/lib/agent-orch/loop_store.py" collect --loop-dir "${loop_dir}"
 }
 
+loop_review_command() {
+  local loop_id=""
+  local repo=""
+  local reviewer=""
+  local review_file=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --loop-id)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--loop-id requires a value"
+        loop_id="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      --reviewer)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--reviewer requires a value"
+        reviewer="$2"
+        shift 2
+        ;;
+      --review-file)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--review-file requires a value"
+        review_file="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown loop review argument: $1"
+        ;;
+    esac
+  done
+
+  [[ -n "${reviewer}" ]] || die "missing_arg" "--reviewer is required"
+  [[ -n "${review_file}" ]] || die "missing_arg" "--review-file is required"
+
+  local loop_dir
+  loop_resolve_dir loop_dir "${loop_id}" "${repo}"
+  python3 "${ROOT_DIR}/lib/agent-orch/review.py" \
+    --loop-dir "${loop_dir}" \
+    --reviewer "${reviewer}" \
+    --review-file "${review_file}"
+}
+
 loop_command() {
   local subcommand="${1:-}"
   shift || true
@@ -624,8 +669,11 @@ loop_command() {
     collect)
       loop_collect_command "$@"
       ;;
+    review)
+      loop_review_command "$@"
+      ;;
     *)
-      die "unknown_arg" "expected loop subcommand: start, status, or collect"
+      die "unknown_arg" "expected loop subcommand: start, status, collect, or review"
       ;;
   esac
 }
