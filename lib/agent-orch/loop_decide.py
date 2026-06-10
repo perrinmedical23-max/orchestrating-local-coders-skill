@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+REQUIRED_REVIEWERS = ("correctness", "integration")
+VALID_STATUSES = {"passed", "blocked", "needs_human"}
+VALID_ACCEPTANCE_MATCHES = {"met", "partial", "not_met", "unclear"}
+
+
+class AgentOrchError(Exception):
+    def __init__(self, code, message, details=None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = details or {}
+
+
+def fail(code, message, details=None):
+    raise AgentOrchError(code, message, details)
+
+
+def print_error(exc):
+    payload = {
+        "status": "failed",
+        "error": exc.code,
+        "message": exc.message,
+    }
+    if exc.details:
+        payload.update(exc.details)
+    print(json.dumps(payload, separators=(",", ":")), file=sys.stderr)
+
+
+def print_json(payload):
+    print(json.dumps(payload, separators=(",", ":")))
+
+
+def utc_now():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def read_json(path, error_code, label):
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except json.JSONDecodeError as exc:
+        fail(error_code, f"{label} is invalid JSON: {path}: {exc}", {"path": str(path)})
+    except OSError as exc:
+        fail(error_code, f"{label} could not be read: {path}: {exc}", {"path": str(path)})
+    if not isinstance(payload, dict):
+        fail(error_code, f"{label} must be a JSON object: {path}", {"path": str(path)})
+    return payload
+
+
+def load_loop(loop_dir):
+    loop_path = Path(loop_dir).expanduser().resolve(strict=False) / "loop.json"
+    if not loop_path.is_file():
+        fail("loop_not_found", f"loop not found: {loop_path.parent}")
+    payload = read_json(loop_path, "loop_state_invalid", "loop state")
+    if not isinstance(payload.get("current_iteration"), int):
+        fail("loop_state_invalid", "loop current_iteration must be an integer")
+    if not isinstance(payload.get("loop_id"), str):
+        fail("loop_state_invalid", "loop_id must be a string")
+    return loop_path, payload
+
+
+def load_report(report_path):
+    if not report_path.is_file():
+        fail("report_missing", f"current iteration report is missing: {report_path}", {"report_path": str(report_path)})
+    return read_json(report_path, "report_invalid", "current iteration report")
+
+
+def require_review_string(payload, field):
+    if not isinstance(payload.get(field), str):
+        raise ValueError(f"review field must be a string: {field}")
+
+
+def require_review_array(payload, field):
+    if not isinstance(payload.get(field), list):
+        raise ValueError(f"review field must be an array: {field}")
+
+
+def validate_recorded_review(reviewer, payload):
+    require_review_string(payload, "status")
+    if payload["status"] not in VALID_STATUSES:
+        raise ValueError("review status must be passed, blocked, or needs_human")
+    require_review_string(payload, "summary")
+    require_review_array(payload, "blocking_findings")
+    if reviewer == "correctness":
+        require_review_array(payload, "tests_required")
+        require_review_array(payload, "residual_risks")
+        return
+    require_review_string(payload, "acceptance_match")
+    if payload["acceptance_match"] not in VALID_ACCEPTANCE_MATCHES:
+        raise ValueError("acceptance_match must be met, partial, not_met, or unclear")
+    require_review_array(payload, "integration_risks")
+    if "suggested_next_task" not in payload:
+        raise ValueError("review field is required: suggested_next_task")
+    if not (payload["suggested_next_task"] is None or isinstance(payload["suggested_next_task"], (str, dict))):
+        raise ValueError("suggested_next_task must be null, string, or object")
+
+
+def normalize_recorded_review(reviewer, review_path):
+    if not review_path.is_file():
+        return None
+    try:
+        with review_path.open("r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (json.JSONDecodeError, OSError) as exc:
+        return {
+            "status": "needs_human",
+            "summary": "Recorded reviewer JSON is unreadable and requires human review.",
+            "blocking_findings": [],
+            "error_code": "review_state_invalid",
+            "diagnostic": str(exc),
+        }
+    if not isinstance(payload, dict):
+        return {
+            "status": "needs_human",
+            "summary": "Recorded reviewer JSON is not an object and requires human review.",
+            "blocking_findings": [],
+            "error_code": "review_state_invalid",
+            "diagnostic": f"{reviewer} review must be a JSON object",
+        }
+    try:
+        validate_recorded_review(reviewer, payload)
+    except ValueError as exc:
+        return {
+            **payload,
+            "status": "needs_human",
+            "error_code": payload.get("error_code", "review_state_invalid"),
+            "diagnostic": str(exc),
+        }
+    return payload
+
+
+def write_json(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2)
+        handle.write("\n")
+
+
+def update_loop_state(loop_path, loop_payload, state):
+    updated = dict(loop_payload)
+    updated["state"] = state
+    updated["updated_at"] = utc_now()
+    write_json(loop_path, updated)
+
+
+def decide_command(args):
+    loop_path, loop_payload = load_loop(args.loop_dir)
+    loop_dir = loop_path.parent
+    iteration = loop_payload["current_iteration"]
+    iteration_dir = loop_dir / "iterations" / str(iteration)
+    report_path = iteration_dir / "report.json"
+    reviews_dir = iteration_dir / "reviews"
+    decision_path = iteration_dir / "decision.json"
+
+    report_payload = load_report(report_path)
+
+    reviews = {}
+    missing_reviewers = []
+    for reviewer in REQUIRED_REVIEWERS:
+        review_path = reviews_dir / f"{reviewer}.json"
+        review_payload = normalize_recorded_review(reviewer, review_path)
+        if review_payload is None:
+            missing_reviewers.append(reviewer)
+        else:
+            reviews[reviewer] = {
+                "path": str(review_path),
+                "payload": review_payload,
+                "status": review_payload["status"],
+            }
+
+    if missing_reviewers:
+        fail(
+            "review_missing",
+            "required reviewer output is missing",
+            {
+                "loop_id": loop_payload["loop_id"],
+                "current_iteration": iteration,
+                "missing_reviewers": missing_reviewers,
+            },
+        )
+
+    reviewer_statuses = {reviewer: reviews[reviewer]["status"] for reviewer in REQUIRED_REVIEWERS}
+    blocking_reviewers = [
+        reviewer
+        for reviewer in REQUIRED_REVIEWERS
+        if reviewer_statuses[reviewer] in {"blocked", "needs_human"}
+    ]
+    if all(status == "passed" for status in reviewer_statuses.values()):
+        state = "completed"
+        decision = "completed"
+    else:
+        state = "manual_gate"
+        decision = "manual_gate"
+
+    decided_at = utc_now()
+    payload = {
+        "loop_id": loop_payload["loop_id"],
+        "state": state,
+        "current_iteration": iteration,
+        "decision": decision,
+        "blocking_reviewers": blocking_reviewers,
+        "next_task_path": None,
+        "decided_at": decided_at,
+        "report_path": str(report_path),
+        "report_status": report_payload.get("status"),
+        "review_paths": {reviewer: reviews[reviewer]["path"] for reviewer in REQUIRED_REVIEWERS},
+        "reviewer_statuses": reviewer_statuses,
+        "decision_path": str(decision_path),
+    }
+
+    write_json(decision_path, payload)
+    update_loop_state(loop_path, loop_payload, state)
+    print_json(payload)
+    return 0
+
+
+class JsonArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        if message.startswith("the following arguments are required:"):
+            fail("missing_arg", message)
+        if message.startswith("unrecognized arguments:"):
+            fail("unknown_arg", message)
+        fail("invalid_args", message)
+
+
+def build_parser():
+    parser = JsonArgumentParser()
+    parser.add_argument("--loop-dir", required=True)
+    return parser
+
+
+def main(argv):
+    parser = build_parser()
+    try:
+        args = parser.parse_args(argv)
+        return decide_command(args)
+    except AgentOrchError as exc:
+        print_error(exc)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

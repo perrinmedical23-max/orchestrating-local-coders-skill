@@ -18,6 +18,7 @@ tests=(
   "doctor.sh"
   "loop-start.sh"
   "loop-review.sh"
+  "loop-decide.sh"
 )
 
 for test_name in "${tests[@]}"; do

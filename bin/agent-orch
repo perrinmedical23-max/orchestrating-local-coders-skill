@@ -655,6 +655,34 @@ loop_review_command() {
     --review-file "${review_file}"
 }
 
+loop_decide_command() {
+  local loop_id=""
+  local repo=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --loop-id)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--loop-id requires a value"
+        loop_id="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown loop decide argument: $1"
+        ;;
+    esac
+  done
+
+  local loop_dir
+  loop_resolve_dir loop_dir "${loop_id}" "${repo}"
+  python3 "${ROOT_DIR}/lib/agent-orch/loop_decide.py" \
+    --loop-dir "${loop_dir}"
+}
+
 loop_command() {
   local subcommand="${1:-}"
   shift || true
@@ -672,8 +700,11 @@ loop_command() {
     review)
       loop_review_command "$@"
       ;;
+    decide)
+      loop_decide_command "$@"
+      ;;
     *)
-      die "unknown_arg" "expected loop subcommand: start, status, collect, or review"
+      die "unknown_arg" "expected loop subcommand: start, status, collect, review, or decide"
       ;;
   esac
 }
