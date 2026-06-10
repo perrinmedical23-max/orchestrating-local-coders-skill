@@ -192,7 +192,28 @@ def collect_command(args):
     loop_path, loop_payload = load_loop(args.loop_dir)
     iteration = loop_payload["current_iteration"]
     iteration_dir = loop_path.parent / "iterations" / str(iteration)
-    print_json({
+    report_path = iteration_dir / "report.json"
+    report_status = None
+    changed_files = []
+    tests_run = []
+    if report_path.is_file():
+        try:
+            with report_path.open("r", encoding="utf-8") as handle:
+                report = json.load(handle)
+            report_status = report.get("status")
+            changed_files = report.get("files_changed", [])
+            tests_run = report.get("tests_run", [])
+            if not isinstance(changed_files, list):
+                changed_files = []
+            if not isinstance(tests_run, list):
+                tests_run = []
+        except Exception:
+            report_status = "failed"
+    diff_summary_path = iteration_dir / "diff_summary"
+    diff_summary = ""
+    if diff_summary_path.is_file():
+        diff_summary = diff_summary_path.read_text(encoding="utf-8")
+    payload = {
         "loop_id": loop_payload["loop_id"],
         "state": loop_payload["state"],
         "status": loop_payload["state"],
@@ -201,7 +222,13 @@ def collect_command(args):
         "repo_path": loop_payload["repo_path"],
         "iteration_dir": str(iteration_dir),
         "task_path": str(iteration_dir / "task.json"),
-    })
+        "report_path": str(report_path),
+        "report_status": report_status,
+        "changed_files": changed_files,
+        "tests_run": tests_run,
+        "diff_summary": diff_summary,
+    }
+    print_json(payload)
     return 0
 
 

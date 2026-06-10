@@ -34,9 +34,21 @@ def synthesize_failure(report_path, provider_result_path, stdout_path, stderr_pa
     except Exception:
         provider_result = {}
 
+    if provider_result.get("timed_out"):
+        error_code = "provider_timeout"
+    elif provider_result.get("signal") is not None:
+        error_code = "provider_signal"
+    elif provider_result.get("exit_code") not in (None, 0):
+        error_code = "provider_exit_failure"
+    elif raw_report_path:
+        error_code = "worker_report_invalid"
+    else:
+        error_code = "worker_report_missing"
+
     raw_path = str(Path(raw_report_path)) if raw_report_path else None
     payload = {
         "status": "failed",
+        "error_code": error_code,
         "summary": "worker did not produce a valid report",
         "files_changed": [],
         "tests_run": [],

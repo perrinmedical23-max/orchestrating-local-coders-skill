@@ -17,11 +17,17 @@ case "${mode}" in
 esac
 
 report_path=""
+prompt_file=""
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --report|--report-path)
       [[ "$#" -ge 2 ]] || exit 2
       report_path="$2"
+      shift 2
+      ;;
+    --prompt-file)
+      [[ "$#" -ge 2 ]] || exit 2
+      prompt_file="$2"
       shift 2
       ;;
     *)
@@ -30,9 +36,48 @@ while [[ "$#" -gt 0 ]]; do
   esac
 done
 
+role="readiness"
+if [[ -n "${prompt_file}" && -f "${prompt_file}" ]]; then
+  if grep -Fq "Role: implement" "${prompt_file}"; then
+    role="implement"
+  elif grep -Fq "Role: explore" "${prompt_file}"; then
+    role="explore"
+  fi
+fi
+
+files_changed_json="[]"
+summary="fake opencode readiness ok"
+if [[ "${role}" == "implement" ]]; then
+  printf 'implemented by fake opencode\n' > fake-opencode-output.txt
+  files_changed_json='["fake-opencode-output.txt"]'
+  summary="fake opencode implemented task"
+elif [[ "${role}" == "explore" ]]; then
+  summary="fake opencode explored task"
+fi
+
+if [[ "${mode}" == "worker-nonzero-missing-report" && "${role}" != "readiness" ]]; then
+  printf 'worker failed before report\n' >&2
+  exit 19
+fi
+
 if [[ -n "${report_path}" ]]; then
   mkdir -p "$(dirname "${report_path}")"
-  cat > "${report_path}" <<'JSON'
-{"status":"completed","summary":"fake opencode readiness ok","files_changed":[],"tests_run":[],"open_questions":[],"risks":[],"notes":[]}
-JSON
+  python3 - "${report_path}" "${summary}" "${files_changed_json}" <<'PY'
+import json
+import sys
+
+path, summary, files_changed_json = sys.argv[1:]
+payload = {
+    "status": "completed",
+    "summary": summary,
+    "files_changed": json.loads(files_changed_json),
+    "tests_run": [],
+    "open_questions": [],
+    "risks": [],
+    "notes": [],
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, separators=(",", ":"))
+    handle.write("\n")
+PY
 fi

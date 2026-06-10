@@ -616,7 +616,7 @@ loop_command() {
 
   case "${subcommand}" in
     start)
-      python3 "${ROOT_DIR}/lib/agent-orch/loop_store.py" create "$@"
+      python3 "${ROOT_DIR}/lib/agent-orch/external_cli.py" "$@"
       ;;
     status)
       loop_status_command "$@"
