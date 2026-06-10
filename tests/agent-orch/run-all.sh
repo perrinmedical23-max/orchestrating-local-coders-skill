@@ -16,6 +16,7 @@ tests=(
   "runtime-binding.sh"
   "attempts.sh"
   "doctor.sh"
+  "loop-start.sh"
 )
 
 for test_name in "${tests[@]}"; do

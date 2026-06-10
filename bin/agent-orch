@@ -543,6 +543,93 @@ provider_command() {
   python3 "${ROOT_DIR}/lib/agent-orch/provider_config.py" "${rewritten[@]}"
 }
 
+loop_resolve_dir() {
+  local result_var="$1"
+  local loop_id="$2"
+  local repo="$3"
+
+  [[ -n "${loop_id}" ]] || die "missing_arg" "--loop-id is required"
+  [[ -n "${repo}" ]] || die "missing_arg" "--repo is required"
+
+  local repo_path
+  repo_path="$(agent_orch_resolve_repo "${repo}")"
+  printf -v "${result_var}" '%s' "${repo_path}/.superpowers/agent-orch/loops/${loop_id}"
+}
+
+loop_status_command() {
+  local loop_id=""
+  local repo=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --loop-id)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--loop-id requires a value"
+        loop_id="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown loop status argument: $1"
+        ;;
+    esac
+  done
+
+  local loop_dir
+  loop_resolve_dir loop_dir "${loop_id}" "${repo}"
+  python3 "${ROOT_DIR}/lib/agent-orch/loop_store.py" status --loop-dir "${loop_dir}"
+}
+
+loop_collect_command() {
+  local loop_id=""
+  local repo=""
+
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --loop-id)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--loop-id requires a value"
+        loop_id="$2"
+        shift 2
+        ;;
+      --repo)
+        [[ "$#" -ge 2 ]] || die "missing_arg" "--repo requires a value"
+        repo="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown_arg" "unknown loop collect argument: $1"
+        ;;
+    esac
+  done
+
+  local loop_dir
+  loop_resolve_dir loop_dir "${loop_id}" "${repo}"
+  python3 "${ROOT_DIR}/lib/agent-orch/loop_store.py" collect --loop-dir "${loop_dir}"
+}
+
+loop_command() {
+  local subcommand="${1:-}"
+  shift || true
+
+  case "${subcommand}" in
+    start)
+      python3 "${ROOT_DIR}/lib/agent-orch/loop_store.py" create "$@"
+      ;;
+    status)
+      loop_status_command "$@"
+      ;;
+    collect)
+      loop_collect_command "$@"
+      ;;
+    *)
+      die "unknown_arg" "expected loop subcommand: start, status, or collect"
+      ;;
+  esac
+}
+
 command_name="${1:-}"
 shift || true
 
@@ -565,7 +652,10 @@ case "${command_name}" in
   provider)
     provider_command "$@"
     ;;
+  loop)
+    loop_command "$@"
+    ;;
   *)
-    die "unknown_command" "expected one of: run, status, collect, cleanup, doctor, provider"
+    die "unknown_command" "expected one of: run, status, collect, cleanup, doctor, provider, loop"
     ;;
 esac
