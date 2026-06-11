@@ -13,6 +13,8 @@ Runtime dependencies: `bash`, `git`, and `python3`.
 - V1 wrapper core implemented
 - V1.1 diagnostics surface implemented for fixture providers
 - V2 orchestration loop implemented for OpenCode MVP only
+- Antigravity copy-ready provider template available through explicit per-repo
+  config
 - Coordinating skill available under `skills/coordinating-local-agents/`
 
 ## Scope
@@ -34,7 +36,7 @@ Version 1 and v1.1 are centered on:
 V1.1 supports only `--mode worktree`; inplace execution is follow-up work.
 Real `claude` and `opencode` adapters are follow-up work once local CLI contracts are explicitly pinned.
 
-V2 supports OpenCode through explicit command templates. Claude Code and Antigravity follow-up only: they are not production adapters in this repo. The manual gate default is to stop after reviewer/decision output for Codex inspection. Auto-fix requires explicit `--auto-fix --max-iterations`; there is no automatic merge/integration.
+V2 supports OpenCode through explicit command templates. Antigravity is available only through the explicit per-repo provider template; it is not a default automatic route. Claude Code remains follow-up only. The manual gate default is to stop after reviewer/decision output for Codex inspection. Auto-fix requires explicit `--auto-fix --max-iterations`; there is no automatic merge/integration.
 
 V1.1 borrows setup/status/result contract ideas from
 `openai/codex-plugin-cc`, but not its plugin packaging, app-server bridge,
@@ -60,7 +62,7 @@ bash tests/agent-orch/loop-auto-fix.sh
 bash tests/agent-orch/skill-docs.sh
 ```
 
-Default tests use fake OpenCode fixtures and do not require a real OpenCode install. Optional real-provider smoke is manual and should start with readiness:
+Default tests use fake OpenCode and fake Antigravity/agy fixtures; they do not require real provider installs. Optional real-provider smoke is manual and should start with readiness:
 
 ```bash
 mkdir -p <repo>/.agent-orch
@@ -72,6 +74,19 @@ agent-orch loop review --loop-id <loop-id> --repo <repo> --reviewer correctness 
 agent-orch loop review --loop-id <loop-id> --repo <repo> --reviewer integration --review-file <integration-review.json>
 agent-orch loop decide --loop-id <loop-id> --repo <repo>
 ```
+
+Antigravity can be used through `agy` after explicit per-repo provider setup:
+
+```bash
+mkdir -p <repo>/.agent-orch
+cp examples/antigravity/.agent-orch/providers.json <repo>/.agent-orch/providers.json
+cp examples/antigravity/.agent-orch/agy-run.sh <repo>/.agent-orch/agy-run.sh
+git -C <repo> add .agent-orch/providers.json .agent-orch/agy-run.sh
+git -C <repo> commit -m "Add Antigravity agent-orch provider config"
+agent-orch provider check --provider antigravity --repo <repo>
+```
+
+The default Antigravity worker model is `Gemini 3.5 Flash (High)`; override it with `AGENT_ORCH_ANTIGRAVITY_MODEL`. Auth is manual and fail-fast: authenticate `agy` manually before readiness; `agent-orch` must not start auth flows. The `.agent-orch` files must be in the target repo `HEAD` before worktree execution.
 
 Bounded continuation is opt-in on loop creation and explicit after decisioning:
 

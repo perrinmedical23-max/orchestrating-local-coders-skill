@@ -29,7 +29,7 @@ V1.1 supports wrapper core, worktree execution, task state, `run`/`status`/`coll
 
 ## V2 Loop
 
-Use the v2 loop when dispatching OpenCode MVP only work through an explicit provider config:
+Use the v2 loop when dispatching OpenCode MVP work through an explicit provider config:
 
 ```bash
 # one-time per target repo
@@ -44,9 +44,22 @@ agent-orch loop review --loop-id <loop-id> --repo <repo> --reviewer integration 
 agent-orch loop decide --loop-id <loop-id> --repo <repo>
 ```
 
+Antigravity is also available as an explicit-config provider template after `agy` is already authenticated:
+
+```bash
+mkdir -p <repo>/.agent-orch
+cp examples/antigravity/.agent-orch/providers.json <repo>/.agent-orch/providers.json
+cp examples/antigravity/.agent-orch/agy-run.sh <repo>/.agent-orch/agy-run.sh
+git -C <repo> add .agent-orch/providers.json .agent-orch/agy-run.sh
+git -C <repo> commit -m "Add Antigravity agent-orch provider config"
+agent-orch provider check --provider antigravity --repo <repo>
+```
+
+The default Antigravity worker model is `Gemini 3.5 Flash (High)` for `explore` and `implement`; override it with `AGENT_ORCH_ANTIGRAVITY_MODEL`. Auth is manual and fail-fast: authenticate `agy` manually before readiness; `agent-orch` must not start auth flows. `Claude Opus 4.6 (Thinking)` is a Codex planning helper, not an `agent-orch` loop role. Antigravity remains an explicit-config provider template, not a default automatic route.
+
 The manual gate default is to stop after review/decision output for Codex inspection. Bounded continuation is explicit: pass `--auto-fix --max-iterations` on `loop start`, then run `agent-orch loop continue --loop-id <loop-id> --repo <repo>` only when `loop decide` creates a current `next_task.json`. There is no automatic merge/integration.
 
-Claude Code and Antigravity follow-up only: do not imply production support or route tasks to those providers from this MVP.
+Claude Code remains follow-up only. Do not route tasks to any provider automatically from this MVP.
 
 Read the references as needed:
 

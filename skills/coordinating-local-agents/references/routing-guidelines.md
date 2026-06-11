@@ -10,7 +10,7 @@ Real `claude` and `opencode` adapters are follow-up work only. Do not document o
 
 ## V2 Provider Boundary
 
-V2 is OpenCode MVP only. The implemented real-provider path is `opencode` through an explicit local command template and readiness check:
+V2 keeps the OpenCode MVP only boundary for default routing. The implemented built-in real-provider path is `opencode` through an explicit local command template and readiness check:
 
 ```bash
 mkdir -p <repo>/.agent-orch
@@ -23,7 +23,24 @@ agent-orch loop start --provider opencode --role implement --repo <repo> --task-
 
 OpenCode MVP must support both `explore` and `implement`. It is still a worker provider only: it works in the assigned worktree, writes artifacts, and does not own integration.
 
-Claude Code and Antigravity follow-up only. Do not route to them, document them as production-ready, or imply that their local CLI contracts are implemented.
+Antigravity is an explicit-config provider template, not a default automatic route. Claude Code remains follow-up only. Do not route to any provider automatically, document unconfigured providers as production-ready, or imply that Codex gives up review and integration authority.
+
+## Antigravity Provider Boundary
+
+The provider id is `antigravity`; the backend CLI is `agy`. Use it only after copying and committing the explicit provider config into the target repo:
+
+```bash
+mkdir -p <repo>/.agent-orch
+cp examples/antigravity/.agent-orch/providers.json <repo>/.agent-orch/providers.json
+cp examples/antigravity/.agent-orch/agy-run.sh <repo>/.agent-orch/agy-run.sh
+git -C <repo> add .agent-orch/providers.json .agent-orch/agy-run.sh
+git -C <repo> commit -m "Add Antigravity agent-orch provider config"
+agent-orch provider check --provider antigravity --repo <repo>
+```
+
+Run `agent-orch provider check --provider antigravity --repo <repo>` before dispatch. Auth is manual and fail-fast: if readiness fails, authenticate `agy` manually and retry. The wrapper must not start auth, open a browser, or prompt for credentials.
+
+The default Antigravity worker model is `Gemini 3.5 Flash (High)` for `explore` and `implement`. Override with `AGENT_ORCH_ANTIGRAVITY_MODEL`. `Claude Opus 4.6 (Thinking)` is a Codex planning helper, but it is not an `agent-orch` loop role.
 
 ## Delegation Fit
 
@@ -40,4 +57,4 @@ Do not delegate when the task requires ambiguous product judgment, sensitive cre
 
 Future routing may consider worker strengths, repository language, task type, session reuse, background execution, cancel/resume behavior, and `inplace` execution. Those are not part of v1.
 
-For v2, future routing may add Claude Code, Antigravity, richer provider selection, or production-grade adapter contracts after readiness behavior is pinned. Those are not part of the OpenCode MVP only boundary.
+For v2, future routing may add Claude Code, richer provider selection, or production-grade adapter contracts after readiness behavior is pinned. Those are not part of the OpenCode MVP only boundary.
