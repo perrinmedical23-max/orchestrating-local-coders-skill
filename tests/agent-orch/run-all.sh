@@ -22,6 +22,7 @@ tests=(
   "loop-auto-fix.sh"
   "loop-failure.sh"
   "opencode-template.sh"
+  "antigravity-template.sh"
 )
 
 for test_name in "${tests[@]}"; do

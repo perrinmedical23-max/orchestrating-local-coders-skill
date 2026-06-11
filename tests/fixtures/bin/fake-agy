@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode="${FAKE_AGY_MODE:-success}"
+model=""
+prompt=""
+print_mode="false"
+
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --print|--prompt|-p)
+      print_mode="true"
+      shift
+      ;;
+    --model)
+      [[ "$#" -ge 2 ]] || exit 2
+      model="$2"
+      shift 2
+      ;;
+    *)
+      if [[ -z "${prompt}" ]]; then
+        prompt="$1"
+      else
+        prompt="${prompt} $1"
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [[ "${print_mode}" != "true" ]]; then
+  printf 'fake agy expected --print\n' >&2
+  exit 2
+fi
+
+if [[ -n "${FAKE_AGY_LOG:-}" ]]; then
+  mkdir -p "$(dirname "${FAKE_AGY_LOG}")"
+  {
+    printf 'model=%s\n' "${model}"
+    printf 'prompt=%s\n' "${prompt}"
+  } >> "${FAKE_AGY_LOG}"
+fi
+
+case "${mode}" in
+  bad-readiness)
+    printf 'NOT_OK\n'
+    exit 0
+    ;;
+  nonzero)
+    printf 'fake agy failed\n' >&2
+    exit 17
+    ;;
+esac
+
+if [[ "${prompt}" == "Respond with exactly: AGY_OK" ]]; then
+  printf 'AGY_OK\n'
+else
+  printf 'Fake Antigravity completed task for prompt: %s\n' "${prompt}"
+fi
